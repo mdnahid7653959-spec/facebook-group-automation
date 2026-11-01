@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "a224c66e2538348553a50e6b191ff23ab06f1be2",
-  "shortSha": "a224c66",
-  "message": "fix: eliminate auto-pause behavior, add background watchdog keepalive, and enhance group json sync",
-  "commitDate": "2026-10-27T01:07:23+06:00",
-  "builtAt": "2026-11-01T10:12:57.704Z"
+  "commitSha": "5e132be1dfd9beda8961bb0111b01ad51ed67a9e",
+  "shortSha": "5e132be",
+  "message": "fix: multi-account group persistence, eliminate auto-select bug, and optimize rendering to prevent lag",
+  "commitDate": "2026-11-01T16:20:57+06:00",
+  "builtAt": "2026-11-01T10:21:46.410Z"
 }
