@@ -138,3 +138,35 @@ export function resolveSpintax(text: string): string {
 
   return resolved;
 }
+
+/**
+ * Advanced multi-token group search matching Bengali, English, URL slugs, and group IDs.
+ */
+export function matchesGroupSearch(
+  group: { name?: string; url?: string; groupId?: string; category?: string; location?: string },
+  query: string
+): boolean {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return true;
+
+  // Split query into whitespace-separated tokens
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return true;
+
+  const name = (group.name || '').toLowerCase();
+  const url = (group.url || '').toLowerCase();
+  let decodedUrl = '';
+  try {
+    decodedUrl = decodeURIComponent(url);
+  } catch {
+    decodedUrl = url;
+  }
+  const groupId = (group.groupId || '').toLowerCase();
+  const category = (group.category || '').toLowerCase();
+  const location = (group.location || '').toLowerCase();
+
+  const searchableText = `${name} ${url} ${decodedUrl} ${groupId} ${category} ${location}`;
+
+  // Every token must match somewhere in the group's searchable text
+  return tokens.every(token => searchableText.includes(token));
+}

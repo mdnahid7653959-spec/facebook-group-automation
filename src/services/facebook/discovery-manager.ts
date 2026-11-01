@@ -154,7 +154,7 @@ export async function mergeDiscoveredGroups(
         imageUrl: item.imageUrl,
         category: 'Discovered',
         enabled: true,
-        selected: true, // Selected by default for convenient queue creation
+        selected: false, // Do NOT auto-select by default; user explicitly picks groups
         status: 'READY',
         postCount: 0,
         verified: true,

@@ -30,7 +30,7 @@ import {
   Copy,
 } from 'lucide-react';
 import { validateFacebookGroupUrl, detectDuplicateGroup } from '../../utils/validators';
-import { generateId, formatDate, downloadFile, copyToClipboard } from '../../utils/helpers';
+import { generateId, formatDate, downloadFile, copyToClipboard, matchesGroupSearch } from '../../utils/helpers';
 import { parseGroupsCsv, exportGroupsToCsv, CsvImportSummary } from '../../services/csv/csv-parser';
 import { getDiscoveryProgress, setDiscoveryProgress } from '../../services/facebook/discovery-manager';
 import { getFacebookAccount } from '../../services/storage/chrome-storage';
@@ -265,12 +265,7 @@ export const MyFacebookGroups: React.FC<MyFacebookGroupsProps> = ({
   // Filtered groups
   const filteredGroups = useMemo(() => {
     return groups.filter(g => {
-      const matchesSearch =
-        searchTerm === '' ||
-        g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        g.url.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (g.groupId && g.groupId.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        (g.category && g.category.toLowerCase().includes(searchTerm.toLowerCase()));
+      const matchesSearch = matchesGroupSearch(g, searchTerm);
 
       const matchesStatus = statusFilter === 'ALL' || g.status === statusFilter;
       const matchesPrivacy = privacyFilter === 'ALL' || g.privacy === privacyFilter;

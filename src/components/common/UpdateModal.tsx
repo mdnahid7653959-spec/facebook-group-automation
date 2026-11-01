@@ -160,12 +160,21 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, onSho
   };
 
   // Direct native reload (without build)
-  const handleDirectReload = () => {
-    setStatusMessage('🔄 এক্সটেনশন সরাসরি রিলোড হচ্ছে...');
-    if (onShowToast) onShowToast('এক্সটেনশন রিলোড হচ্ছে...');
-    setTimeout(() => {
+  const handleDirectReload = async () => {
+    setIsUpdating(true);
+    setStatusMessage('🔄 এক্সটেনশন সরাসরি রিলোড ও আপডেট হচ্ছে...');
+    try {
+      if (latestCommit?.sha) {
+        await setCurrentCommitSha(latestCommit.sha);
+        setCurrentSha(latestCommit.sha);
+      }
+      if (onShowToast) onShowToast('✨ এক্সটেনশন রিলোড ও আপডেট সম্পন্ন!');
+      setTimeout(() => {
+        reloadChromeExtension();
+      }, 500);
+    } catch {
       reloadChromeExtension();
-    }, 400);
+    }
   };
 
   return (
@@ -394,10 +403,10 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ isOpen, onClose, onSho
               <button
                 onClick={handleDirectReload}
                 disabled={isUpdating}
-                className="flex-1 py-2.5 px-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 active:scale-[0.99] transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                className="flex-1 py-2.5 px-3 rounded-xl font-bold text-xs text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-[0.99] transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <Zap size={14} className="text-yellow-300" />
-                <span>Instant Reload Extension</span>
+                <span>{isUpdating ? 'রিলোড ও আপডেট হচ্ছে...' : 'Update & Reload Extension (এখনই আপডেট ও রিলোড করুন)'}</span>
               </button>
             )}
           </div>

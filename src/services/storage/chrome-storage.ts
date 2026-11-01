@@ -117,10 +117,135 @@ export async function getAccountGroupsMap(): Promise<Record<string, AccountGroup
   return storageGet<Record<string, AccountGroupStorage>>(STORAGE_KEYS.ACCOUNT_GROUPS, {});
 }
 
+let hasPerformedLegacySelectionReset = false;
+
+/**
+ * Retrieves all unique groups saved across all accounts and global storage.
+ */
+export async function getAllSavedGroups(): Promise<Group[]> {
+  const accountMap = await getAccountGroupsMap();
+  const allGroupsMap = new Map<string, Group>();
+
+  const addOrUpdate = (g: Group) => {
+    if (!g || !g.id || isInvalidNotificationGroup(g)) return;
+    const key = (g.groupId || g.url || g.id).toLowerCase();
+    if (!allGroupsMap.has(key)) {
+      allGroupsMap.set(key, { ...g });
+    } else {
+      const existing = allGroupsMap.get(key)!;
+      if (g.name && (!existing.name || g.name.length > existing.name.length)) {
+        existing.name = g.name;
+      }
+      if (g.imageUrl && !existing.imageUrl) {
+        existing.imageUrl = g.imageUrl;
+      }
+      if (g.privacy && g.privacy !== 'UNKNOWN') {
+        existing.privacy = g.privacy;
+      }
+    }
+  };
+
+  // 1. Check all accounts in accountMap
+  for (const accKey of Object.keys(accountMap)) {
+    const accData = accountMap[accKey];
+    if (accData && Array.isArray(accData.groups)) {
+      accData.groups.forEach(addOrUpdate);
+    }
+  }
+
+  // 2. Check global GROUPS key
+  const globalGroups = await storageGet<Group[]>(STORAGE_KEYS.GROUPS, []);
+  globalGroups.forEach(addOrUpdate);
+
+  const result = Array.from(allGroupsMap.values());
+  const selectedCount = result.filter(g => g.selected).length;
+  // If more than 50 groups have selected: true, it is corrupt legacy state from auto-discovery bug
+  if (selectedCount > 50) {
+    result.forEach(g => { g.selected = false; });
+    if (!hasPerformedLegacySelectionReset) {
+      hasPerformedLegacySelectionReset = true;
+      resetAllGroupSelections().catch(() => {});
+    }
+  }
+  return result;
+}
+
+/**
+ * Resets selected: false across all groups in all accounts and global storage.
+ */
+export async function resetAllGroupSelections(): Promise<void> {
+  const accountMap = await getAccountGroupsMap();
+  let changed = false;
+  for (const key of Object.keys(accountMap)) {
+    if (accountMap[key]?.groups && Array.isArray(accountMap[key].groups)) {
+      accountMap[key].groups = accountMap[key].groups.map(g => ({ ...g, selected: false }));
+      changed = true;
+    }
+  }
+  if (changed) {
+    await storageSet(STORAGE_KEYS.ACCOUNT_GROUPS, accountMap);
+  }
+
+  const globalGroups = await storageGet<Group[]>(STORAGE_KEYS.GROUPS, []);
+  if (globalGroups.some(g => g.selected)) {
+    const unselected = globalGroups.map(g => ({ ...g, selected: false }));
+    await storageSet(STORAGE_KEYS.GROUPS, unselected);
+  }
+}
+
+/**
+ * Returns summary of all accounts that currently have saved groups in storage.
+ */
+export async function getAvailableAccountsList(): Promise<Array<{
+  key: string;
+  name: string;
+  userId?: string;
+  count: number;
+}>> {
+  const accountMap = await getAccountGroupsMap();
+  const list: Array<{ key: string; name: string; userId?: string; count: number }> = [];
+
+  for (const accKey of Object.keys(accountMap)) {
+    const accData = accountMap[accKey];
+    if (accData && Array.isArray(accData.groups)) {
+      const valid = accData.groups.filter(g => g && g.id && !isInvalidNotificationGroup(g));
+      if (valid.length > 0) {
+        list.push({
+          key: accKey,
+          name: accData.accountInfo?.name || accKey.replace(/_/g, ' '),
+          userId: accData.accountInfo?.userId,
+          count: valid.length,
+        });
+      }
+    }
+  }
+
+  return list;
+}
+
+/**
+ * Merges groups from all accounts into the active account and global storage.
+ */
+export async function mergeAllAccountsIntoActiveList(targetAccountContext?: string): Promise<{
+  mergedCount: number;
+  totalGroups: Group[];
+}> {
+  const allGroups = await getAllSavedGroups();
+  await setGroups(allGroups, targetAccountContext);
+  return {
+    mergedCount: allGroups.length,
+    totalGroups: allGroups,
+  };
+}
+
 /**
  * Retrieves groups for the active or specified account context.
  */
 export async function getGroups(accountContext?: string): Promise<Group[]> {
+  if (accountContext === 'all') {
+    return getAllSavedGroups();
+  }
+
   const currentAcc = await getFacebookAccount();
   const targetKey = normalizeAccountKey(accountContext || currentAcc?.userId || currentAcc?.name);
 
@@ -128,23 +253,27 @@ export async function getGroups(accountContext?: string): Promise<Group[]> {
   if (accountMap[targetKey] && Array.isArray(accountMap[targetKey].groups) && accountMap[targetKey].groups.length > 0) {
     const raw = accountMap[targetKey].groups;
     const cleaned = raw.filter(g => !isInvalidNotificationGroup(g));
-    if (cleaned.length > 0) return cleaned;
+    if (cleaned.length > 0) {
+      if (cleaned.filter(g => g.selected).length > 50) {
+        cleaned.forEach(g => { g.selected = false; });
+      }
+      return cleaned;
+    }
   }
 
   // Fallback to global GROUPS key if account-scoped key not initialized yet
   const raw = await storageGet<Group[]>(STORAGE_KEYS.GROUPS, []);
   const cleaned = raw.filter(g => !isInvalidNotificationGroup(g));
   if (cleaned.length > 0) {
+    if (cleaned.filter(g => g.selected).length > 50) {
+      cleaned.forEach(g => { g.selected = false; });
+    }
     return cleaned;
   }
 
-  // Fallback to any account in accountMap with stored groups
-  for (const key of Object.keys(accountMap)) {
-    if (accountMap[key] && Array.isArray(accountMap[key].groups) && accountMap[key].groups.length > 0) {
-      const accRaw = accountMap[key].groups.filter(g => !isInvalidNotificationGroup(g));
-      if (accRaw.length > 0) return accRaw;
-    }
-  }
+  // Fallback to all saved groups across accounts
+  const all = await getAllSavedGroups();
+  if (all.length > 0) return all;
 
   return [];
 }

@@ -33,6 +33,7 @@ export interface ProgressiveScanOptions {
   stagnantLimit?: number;
   scrollDelayMs?: number;
   accountContext?: string;
+  shouldStop?: () => boolean;
   onProgress?: (foundCount: number, status: string, targetTotal?: number | null, metrics?: DebugMetrics) => void;
   onBatchDiscovered?: (newItems: DiscoveredGroupItem[], totalSoFar: number, metrics?: DebugMetrics) => Promise<void> | void;
 }
@@ -388,7 +389,7 @@ export async function performProgressiveGroupScan(
 ): Promise<DiscoveryScanResult> {
   const maxRounds = options.maxRounds || 350;
   const stagnantLimit = options.stagnantLimit || 35;
-  const scrollDelayMs = options.scrollDelayMs !== undefined ? options.scrollDelayMs : 75;
+  const scrollDelayMs = options.scrollDelayMs !== undefined ? options.scrollDelayMs : 250;
   const accountContext = options.accountContext;
 
   const startTime = Date.now();
@@ -498,6 +499,14 @@ export async function performProgressiveGroupScan(
     for (let round = 0; round < maxRounds; round++) {
       scrollIterationCount++;
 
+      // Check if user requested early completion / stop
+      if (options.shouldStop && options.shouldStop()) {
+        console.log('[AGP:Engine] Progressive scan stopped by user request.');
+        finalOutcome = allFound.size > 0 ? 'COMPLETE' : 'PARTIAL';
+        finalReason = 'USER_CANCELLED';
+        break;
+      }
+
       // Click "See more" / "See all" buttons periodically
       if (round % 3 === 0) {
         try {
@@ -510,7 +519,7 @@ export async function performProgressiveGroupScan(
       if (currentAnchors.length > 0) {
         const lastAnchor = currentAnchors[currentAnchors.length - 1];
         try {
-          lastAnchor.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'smooth' });
+          lastAnchor.scrollIntoView({ block: 'end', inline: 'nearest', behavior: 'auto' });
         } catch {}
       }
 
@@ -518,7 +527,7 @@ export async function performProgressiveGroupScan(
       const mainEl = document.querySelector('[role="main"], [data-pagelet*="Group"]');
       if (mainEl && mainEl.lastElementChild) {
         try {
-          (mainEl.lastElementChild as HTMLElement).scrollIntoView({ block: 'end', behavior: 'smooth' });
+          (mainEl.lastElementChild as HTMLElement).scrollIntoView({ block: 'end', behavior: 'auto' });
         } catch {}
       }
 

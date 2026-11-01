@@ -249,10 +249,12 @@ async function executeNextQueueItem(): Promise<void> {
 
   const [groups, posts] = await Promise.all([getGroups(), getPosts()]);
   let group = groups.find(
-    g => g.id === nextItem.groupId || g.groupId === nextItem.groupId || (g.url && nextItem.groupId && g.url.includes(nextItem.groupId))
+    g => g.id === nextItem.groupId ||
+         (g.groupId && nextItem.groupId && g.groupId.toLowerCase() === nextItem.groupId.toLowerCase()) ||
+         (g.url && nextItem.groupId && g.url.includes(nextItem.groupId))
   );
 
-  let groupUrl = group?.url || nextItem.groupUrl || '';
+  let groupUrl = nextItem.groupUrl || group?.url || '';
   if (!groupUrl && nextItem.groupId) {
     if (!nextItem.groupId.startsWith('grp_') && !nextItem.groupId.startsWith('queue_')) {
       groupUrl = nextItem.groupId.startsWith('http')
@@ -356,25 +358,38 @@ async function executeNextQueueItem(): Promise<void> {
   const currentWinId = await getActivePostingWindowId();
   if (!tabId || !currentWinId) {
     try {
-      const win = await chrome.windows.create({
-        url: activeGroup.url,
-        type: 'popup',
-        width: 960,
-        height: 720,
-        top: 60,
-        left: 60,
-        focused: true,
-      });
-      await setActivePostingWindowId(win.id ?? null);
-      if (win.tabs && win.tabs.length > 0) {
-        tabId = win.tabs[0].id;
-      } else if (win.id) {
-        const winTabs = await chrome.tabs.query({ windowId: win.id });
-        tabId = winTabs[0]?.id;
+      if (chrome.windows && chrome.windows.create) {
+        const win = await chrome.windows.create({
+          url: activeGroup.url,
+          type: 'popup',
+          width: 960,
+          height: 720,
+          top: 60,
+          left: 60,
+          focused: true,
+        });
+        await setActivePostingWindowId(win.id ?? null);
+        if (win.tabs && win.tabs.length > 0) {
+          tabId = win.tabs[0].id;
+        } else if (win.id) {
+          const winTabs = await chrome.tabs.query({ windowId: win.id });
+          tabId = winTabs[0]?.id;
+        }
+        await setActivePostingTabId(tabId ?? null);
       }
-      await setActivePostingTabId(tabId ?? null);
     } catch (winErr) {
-      console.error('[AGP:Worker] Failed to create dedicated automation popup window:', winErr);
+      console.warn('[AGP:Worker] Popup window creation not supported (mobile Kiwi/Android fallback):', winErr);
+    }
+  }
+
+  // Mobile / Kiwi Browser Fallback: If popup window creation is unsupported or failed, create a standard active tab
+  if (!tabId) {
+    try {
+      const fallbackTab = await chrome.tabs.create({ url: activeGroup.url, active: true });
+      tabId = fallbackTab.id;
+      await setActivePostingTabId(tabId ?? null);
+    } catch (tabFallbackErr) {
+      console.error('[AGP:Worker] Failed to create group tab:', tabFallbackErr);
     }
   }
 
@@ -470,25 +485,37 @@ async function executeGroupDiscovery(): Promise<DiscoveryProgress> {
   try {
     const discoveryUrl = 'https://www.facebook.com/groups/joins/?nav_source=tab';
     
-    // Always open in a dedicated small popup window - NEVER hijack user's personal open tabs!
-    const win = await chrome.windows.create({
-      url: discoveryUrl,
-      type: 'popup',
-      width: 500,
-      height: 680,
-      top: 80,
-      left: 80,
-      focused: true,
-    });
+    // Open in a dedicated small popup window (desktop) or standard tab (mobile Kiwi)
+    try {
+      if (chrome.windows && chrome.windows.create) {
+        const win = await chrome.windows.create({
+          url: discoveryUrl,
+          type: 'popup',
+          width: 500,
+          height: 680,
+          top: 80,
+          left: 80,
+          focused: true,
+        });
 
-    createdWindowId = win.id ?? null;
-    activeDiscoveryWindowId = createdWindowId;
+        createdWindowId = win.id ?? null;
+        activeDiscoveryWindowId = createdWindowId;
 
-    if (win.tabs && win.tabs.length > 0) {
-      tabId = win.tabs[0].id ?? null;
-    } else if (createdWindowId) {
-      const tabs = await chrome.tabs.query({ windowId: createdWindowId });
-      tabId = tabs[0]?.id ?? null;
+        if (win.tabs && win.tabs.length > 0) {
+          tabId = win.tabs[0].id ?? null;
+        } else if (createdWindowId) {
+          const tabs = await chrome.tabs.query({ windowId: createdWindowId });
+          tabId = tabs[0]?.id ?? null;
+        }
+      }
+    } catch (winErr) {
+      console.warn('[AGP:Worker] Popup creation failed, falling back to tab (mobile/Kiwi):', winErr);
+    }
+
+    // Mobile fallback if window popup is not supported
+    if (!tabId) {
+      const fallbackTab = await chrome.tabs.create({ url: discoveryUrl, active: true });
+      tabId = fallbackTab.id ?? null;
     }
 
     if (!tabId) {
@@ -575,7 +602,7 @@ async function executeGroupDiscovery(): Promise<DiscoveryProgress> {
       }
 
       const mergeResult = await mergeDiscoveredGroups(discoveredGroups, {
-        syncMode: 'exact',
+        syncMode: 'merge',
         accountContext,
       });
 
@@ -885,6 +912,8 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
             groupIds: string[];
             postId: string;
             delaySec?: number;
+            groups?: Group[];
+            post?: Post;
           };
           if (p && Array.isArray(p.groupIds) && p.postId) {
             const curSettings = await getSettings();
@@ -903,7 +932,33 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
             await setActivePostingWindowId(null);
             await setActivePostingTabId(null);
 
-            await createQueueItems(p.groupIds, p.postId, 'READY');
+            // Persist groups and post if passed directly
+            if (p.groups && p.groups.length > 0) {
+              try {
+                const curGroups = await getGroups();
+                const existingMap = new Map(curGroups.map(g => [g.groupId ? g.groupId.toLowerCase() : g.id.toLowerCase(), g]));
+                for (const g of p.groups) {
+                  const key = g.groupId ? g.groupId.toLowerCase() : g.id.toLowerCase();
+                  if (!existingMap.has(key)) {
+                    curGroups.push(g);
+                    existingMap.set(key, g);
+                  }
+                }
+                await setGroups(curGroups);
+              } catch (gErr) {
+                console.warn('[AGP:Worker] Error syncing groups in CREATE_AND_START_QUEUE:', gErr);
+              }
+            }
+            if (p.post) {
+              try {
+                const curPosts = await getPosts();
+                await setPosts([p.post, ...curPosts.filter(x => x.id !== p.post!.id)]);
+              } catch (pErr) {
+                console.warn('[AGP:Worker] Error syncing post in CREATE_AND_START_QUEUE:', pErr);
+              }
+            }
+
+            await createQueueItems(p.groupIds, p.postId, 'READY', p.groups, p.post);
             const state = await getQueueState();
             await setQueueState({
               ...state,
@@ -914,8 +969,14 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
             });
             await logger.info('queue', `Sequential posting queue created for ${p.groupIds.length} groups`);
             await dispatchWebhookEvent('QUEUE_STARTED', { count: p.groupIds.length });
-            await executeNextQueueItem();
-            sendResponse({ success: true });
+
+            // CRITICAL: Respond immediately so client message port does NOT time out!
+            sendResponse({ success: true, count: p.groupIds.length });
+
+            // Launch execution asynchronously
+            executeNextQueueItem().catch(execErr => {
+              console.error('[AGP:Worker] Error executing first queue item:', execErr);
+            });
           } else {
             sendResponse({ success: false, error: 'Invalid payload for CREATE_AND_START_QUEUE' });
           }

@@ -63,18 +63,30 @@ export function calculateQueueStats(items: QueueItem[]): QueueStatistics {
 export async function createQueueItems(
   groupIds: string[],
   postId: string,
-  initialStatus: QueueStatus = 'READY'
+  initialStatus: QueueStatus = 'READY',
+  customGroups?: Group[],
+  customPost?: Post
 ): Promise<QueueItem[]> {
-  const [groups, posts] = await Promise.all([getGroups(), getPosts()]);
-  const post = posts.find(p => p.id === postId);
+  const [storedGroups, storedPosts] = await Promise.all([getGroups(), getPosts()]);
+  const allGroups = customGroups && customGroups.length > 0 ? customGroups : storedGroups;
+  const post = customPost || storedPosts.find(p => p.id === postId);
 
   let order = 0;
   const newItems: QueueItem[] = groupIds.map(groupId => {
     order++;
-    const grp = groups.find(
-      g => g.id === groupId || g.groupId === groupId || (g.url && g.url.includes(groupId))
+    const grp = allGroups.find(
+      g => g.id === groupId || (g.groupId && g.groupId.toLowerCase() === groupId.toLowerCase()) || (g.url && g.url.includes(groupId))
     );
-    const fallbackUrl = grp?.url || (groupId.startsWith('http') ? groupId : `https://www.facebook.com/groups/${groupId}/`);
+    let fallbackUrl = grp?.url;
+    if (!fallbackUrl) {
+      if (groupId.startsWith('http')) {
+        fallbackUrl = groupId;
+      } else if (!groupId.startsWith('grp_') && !groupId.startsWith('queue_')) {
+        fallbackUrl = `https://www.facebook.com/groups/${groupId}/`;
+      } else {
+        fallbackUrl = '';
+      }
+    }
 
     return {
       id: generateId('queue'),

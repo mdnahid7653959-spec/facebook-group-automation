@@ -194,16 +194,66 @@ export function isRequestedButton(el: HTMLElement): boolean {
   );
 }
 
+/**
+ * Reliably extracts and normalizes the Facebook group slug or ID from any group href.
+ * Supports numeric IDs, English slugs, URL-encoded names (%E0...), and raw Unicode.
+ */
+export function extractGroupSlug(rawHref: string): string | null {
+  if (!rawHref || typeof rawHref !== 'string') return null;
+  // Exclude post permalinks, comment links, media popups, user profile links
+  if (
+    rawHref.includes('/permalink/') ||
+    rawHref.includes('/posts/') ||
+    rawHref.includes('/photos/') ||
+    rawHref.includes('/videos/') ||
+    rawHref.includes('/user/') ||
+    rawHref.includes('comment_id=') ||
+    rawHref.includes('notif_id=')
+  ) {
+    return null;
+  }
+
+  const m = rawHref.match(/(?:facebook\.com|fb\.com)?\/groups\/([^/?#]+)/i);
+  if (!m || !m[1]) return null;
+
+  try {
+    const decoded = decodeURIComponent(m[1]).trim().toLowerCase();
+    if (!decoded || NON_GROUP_SLUGS.has(decoded)) return null;
+    return decoded;
+  } catch {
+    const raw = m[1].trim().toLowerCase();
+    if (!raw || NON_GROUP_SLUGS.has(raw)) return null;
+    return raw;
+  }
+}
+
 function extractGroupName(anchor: HTMLElement, card: HTMLElement, slugOrId: string): string {
   let name = '';
-  const aria = (anchor.getAttribute('aria-label') || '').trim();
-  if (aria && aria.length >= 2 && !aria.toLowerCase().includes('view group') && !aria.toLowerCase().includes('গ্রুপ দেখুন')) {
-    name = aria;
-  } else {
-    const heading = card.querySelector('h1, h2, h3, h4, span[dir="auto"], strong');
-    name = (heading?.textContent || anchor.textContent || '').trim();
+  // 1. Check anchor text and inner elements first (closest to group title)
+  const anchorSpan = anchor.querySelector<HTMLElement>('span[dir="auto"], strong, h1, h2, h3, h4');
+  if (anchorSpan && anchorSpan.textContent && anchorSpan.textContent.trim().length >= 2) {
+    name = anchorSpan.textContent.trim();
+  }
+  if (!name) {
+    const aria = (anchor.getAttribute('aria-label') || '').trim();
+    if (aria && aria.length >= 2 && !aria.toLowerCase().includes('view group') && !aria.toLowerCase().includes('গ্রুপ দেখুন')) {
+      name = aria;
+    }
+  }
+  if (!name && anchor.textContent) {
+    name = anchor.textContent.trim();
+  }
+  // 2. Check card heading
+  if (!name || name.length < 2) {
+    const heading = card.querySelector<HTMLElement>('h1, h2, h3, h4, [role="heading"], strong');
+    name = (heading?.textContent || '').trim();
   }
   name = name.split('\n')[0].trim();
+  // Filter out action words that are definitely not group names
+  const lower = name.toLowerCase();
+  if (lower === 'join' || lower === 'যোগ দিন' || lower === 'view group' || lower === 'গ্রুপ দেখুন' || lower === 'visit' || lower === 'joined') {
+    name = '';
+  }
   if (!name || name.length < 2) {
     name = slugOrId
       .split(/[-_.]+/)
@@ -236,9 +286,10 @@ function extractMembersText(card: HTMLElement): string {
 
 /**
  * Scans the current DOM for Facebook group search result cards.
- * Uses a robust dual-strategy approach:
+ * Uses a robust 3-strategy approach:
  * 1. Direct Join Button Search: Finds all join buttons on the screen and maps them to group cards.
  * 2. Group Anchor Search: Walks up from group links to capture cards and status.
+ * 3. Feed Item Container Search: Queries all group cards in the main feed.
  */
 export function scanPageForGroupCards(): ScannedCardResult[] {
   if (typeof document === 'undefined') return [];
@@ -261,19 +312,15 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
     let targetAnchor: HTMLAnchorElement | null = null;
     let targetCard: HTMLElement | null = null;
 
-    for (let depth = 0; depth < 12 && card && card !== document.body; depth++) {
+    for (let depth = 0; depth < 25 && card && card !== document.body; depth++) {
       const gAnchors = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"]')).filter(a => {
-        const href = a.href || a.getAttribute('href') || '';
-        const m = href.match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-        return m && !NON_GROUP_SLUGS.has(m[1].toLowerCase());
+        const h = a.href || a.getAttribute('href') || '';
+        return Boolean(extractGroupSlug(h));
       });
 
       if (gAnchors.length > 0) {
         const distinct = new Set(
-          gAnchors.map(a => {
-            const m = (a.href || a.getAttribute('href') || '').match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-            return m ? m[1].toLowerCase() : '';
-          }).filter(Boolean)
+          gAnchors.map(a => extractGroupSlug(a.href || a.getAttribute('href') || '')).filter(Boolean)
         );
 
         if (distinct.size === 1) {
@@ -287,11 +334,9 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
     }
 
     if (!targetAnchor) continue;
-    const href = targetAnchor.href || targetAnchor.getAttribute('href') || '';
-    const match = href.match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-    if (!match) continue;
+    const slugOrId = extractGroupSlug(targetAnchor.href || targetAnchor.getAttribute('href') || '');
+    if (!slugOrId) continue;
 
-    const slugOrId = match[1].toLowerCase();
     if (seenGroupIds.has(slugOrId)) continue;
     seenGroupIds.add(slugOrId);
 
@@ -306,7 +351,7 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
         id: slugOrId,
         groupId: slugOrId,
         name,
-        url: `https://www.facebook.com/groups/${slugOrId}/`,
+        url: `https://www.facebook.com/groups/${encodeURIComponent(slugOrId)}/`,
         privacy,
         membersText: membersText || undefined,
         status: 'READY_TO_JOIN',
@@ -321,12 +366,8 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
   const groupAnchors = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"]'));
 
   for (const anchor of groupAnchors) {
-    const href = anchor.href || anchor.getAttribute('href') || '';
-    const match = href.match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-    if (!match) continue;
-
-    const slugOrId = match[1].toLowerCase();
-    if (NON_GROUP_SLUGS.has(slugOrId)) continue;
+    const slugOrId = extractGroupSlug(anchor.href || anchor.getAttribute('href') || '');
+    if (!slugOrId) continue;
     if (seenGroupIds.has(slugOrId)) continue;
 
     let card: HTMLElement | null = anchor.parentElement;
@@ -334,18 +375,14 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
     let foundJoinButton: HTMLElement | null = null;
     let status: AutoJoinGroupItem['status'] = 'READY_TO_JOIN';
 
-    for (let depth = 0; depth < 12 && card && card !== document.body; depth++) {
+    for (let depth = 0; depth < 25 && card && card !== document.body; depth++) {
       const gAnchors = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"]')).filter(a => {
         const h = a.href || a.getAttribute('href') || '';
-        const m = h.match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-        return m && !NON_GROUP_SLUGS.has(m[1].toLowerCase());
+        return Boolean(extractGroupSlug(h));
       });
 
       const distinct = new Set(
-        gAnchors.map(a => {
-          const m = (a.href || a.getAttribute('href') || '').match(/(?:facebook\.com|fb\.com)?\/groups\/([a-zA-Z0-9._-]+)(?:\/|\?|$)/i);
-          return m ? m[1].toLowerCase() : '';
-        }).filter(Boolean)
+        gAnchors.map(a => extractGroupSlug(a.href || a.getAttribute('href') || '')).filter(Boolean)
       );
 
       if (distinct.size > 1) {
@@ -412,12 +449,62 @@ export function scanPageForGroupCards(): ScannedCardResult[] {
         id: slugOrId,
         groupId: slugOrId,
         name,
-        url: `https://www.facebook.com/groups/${slugOrId}/`,
+        url: `https://www.facebook.com/groups/${encodeURIComponent(slugOrId)}/`,
         privacy,
         membersText: membersText || undefined,
         status,
       },
       joinButton: foundJoinButton,
+    });
+  }
+
+  // =========================================================================
+  // Strategy 3: Direct Feed Container Item Scan
+  // =========================================================================
+  const feedItems = Array.from(document.querySelectorAll<HTMLElement>(
+    'div[role="feed"] > div, div[role="main"] div[role="article"], div[data-pagelet*="GroupSearchResult"]'
+  ));
+
+  for (const item of feedItems) {
+    const anchors = Array.from(item.querySelectorAll<HTMLAnchorElement>('a[href*="/groups/"]')).filter(a =>
+      Boolean(extractGroupSlug(a.href || a.getAttribute('href') || ''))
+    );
+    if (anchors.length === 0) continue;
+
+    const slugs = Array.from(new Set(anchors.map(a => extractGroupSlug(a.href || a.getAttribute('href') || '')).filter(Boolean))) as string[];
+    if (slugs.length !== 1) continue;
+
+    const slug = slugs[0];
+    if (seenGroupIds.has(slug)) continue;
+    seenGroupIds.add(slug);
+
+    const anchor = anchors[0];
+    const name = extractGroupName(anchor, item, slug);
+    const privacy = extractPrivacy(item);
+    const membersText = extractMembersText(item);
+
+    let foundBtn: HTMLElement | null = null;
+    let status: AutoJoinGroupItem['status'] = 'READY_TO_JOIN';
+
+    const btns = Array.from(item.querySelectorAll<HTMLElement>('div[role="button"], button, a[role="button"], [role="button"]'));
+    for (const b of btns) {
+      if (isAlreadyJoinedButton(b)) { status = 'ALREADY_JOINED'; break; }
+      if (isRequestedButton(b)) { status = 'REQUESTED'; break; }
+      if (isJoinButton(b)) { status = 'READY_TO_JOIN'; foundBtn = b; break; }
+    }
+
+    results.push({
+      cardElement: item,
+      item: {
+        id: slug,
+        groupId: slug,
+        name,
+        url: `https://www.facebook.com/groups/${encodeURIComponent(slug)}/`,
+        privacy,
+        membersText: membersText || undefined,
+        status,
+      },
+      joinButton: foundBtn,
     });
   }
 

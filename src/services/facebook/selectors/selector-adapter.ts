@@ -200,7 +200,7 @@ export function detectEndOfListIndicator(root: Document | Element = document): b
 function cleanCandidateText(raw: string): string {
   if (!raw) return '';
   let s = raw.trim();
-  s = s.replace(/^(?:Visit|Open|View|গ্রুপ দেখুন|দেখুন)\s+/i, '');
+  s = s.replace(/^(?:Visit group|Visit|Open group|Open|View group|View|গ্রুপ দেখুন|দেখুন|গ্রুপে যান)\s*/i, '');
   s = s.replace(/\s*(?:Last active|You last visited|last visited|active)\s+[^\n]+/i, '');
   s = s.replace(/\s*(?:গত|আগে|মিনিট আগে|ঘণ্টা আগে|দিন আগে)[^\n]*/i, '');
   s = s.replace(/\s*·\s*(?:Public group|Private group|পাবলিক গ্রুপ|প্রাইভেট গ্রুপ).*$/i, '');
@@ -247,7 +247,12 @@ export function verifyGroupCandidate(anchor: HTMLAnchorElement | Element): Candi
     const parts = urlObj.pathname.split('/').filter(Boolean);
     const gIdx = parts.indexOf('groups');
     if (gIdx !== -1 && parts[gIdx + 1]) {
-      slug = parts[gIdx + 1];
+      const rawPart = parts[gIdx + 1];
+      try {
+        slug = decodeURIComponent(rawPart);
+      } catch {
+        slug = rawPart;
+      }
       // Check if it's an individual post or comment permalink
       if (parts.length > gIdx + 2) {
         const sub = parts[gIdx + 2].toLowerCase();
@@ -274,10 +279,29 @@ export function verifyGroupCandidate(anchor: HTMLAnchorElement | Element): Candi
   }
 
   // Check 4 & 5: Check bounded card context
-  const card =
-    anchor.closest('div[role="listitem"], div[role="article"], div[role="gridcell"], li, div[role="row"]') ||
-    anchor.parentElement?.parentElement ||
-    anchor.parentElement;
+  let card: Element | null = anchor.closest(
+    'div[role="listitem"], div[role="article"], div[role="gridcell"], li, div[role="row"]'
+  );
+
+  if (!card) {
+    let p = anchor.parentElement;
+    for (let i = 0; i < 7 && p && p !== document.body; i++) {
+      const pText = (p.textContent || '').toLowerCase();
+      const anchorsCount = p.querySelectorAll ? p.querySelectorAll('a[href*="/groups/"]').length : 0;
+      if (
+        anchorsCount >= 1 &&
+        anchorsCount <= 5 &&
+        (pText.includes('view group') || pText.includes('visited') || pText.includes('last active') || pText.includes('গ্রুপ দেখুন'))
+      ) {
+        card = p;
+        break;
+      }
+      p = p.parentElement;
+    }
+    if (!card) {
+      card = anchor.parentElement?.parentElement || anchor.parentElement;
+    }
+  }
 
   if (card) {
     const cardText = (card.textContent || '').toLowerCase();
@@ -375,10 +399,10 @@ export function verifyGroupCandidate(anchor: HTMLAnchorElement | Element): Candi
     }
   }
 
-  // Priority 4: Meaningful spans in card
+  // Priority 4: Meaningful spans in card (supports Bengali and multilingual group names)
   if (!name && card) {
     const spans = Array.from(
-      card.querySelectorAll('h1, h2, h3, h4, span[dir="auto"], strong, a[href*="/groups/"] > span')
+      card.querySelectorAll('h1, h2, h3, h4, span[dir="auto"], strong, a[href*="/groups/"] > span, a[href*="/groups/"], div[dir="auto"]')
     );
     for (const sp of spans) {
       if (sp === anchor) continue;
@@ -396,9 +420,11 @@ export function verifyGroupCandidate(anchor: HTMLAnchorElement | Element): Candi
         !lower.includes('hours ago') &&
         !lower.includes('minutes ago') &&
         !lower.includes('days ago') &&
+        !lower.includes('weeks ago') &&
         !lower.includes('ঘণ্টা আগে') &&
         !lower.includes('দিন আগে') &&
-        !/^\d+ (hours?|minutes?|days?|weeks?) ago$/i.test(lower)
+        !lower.includes('সপ্তাহ আগে') &&
+        !/^\d+\s*(hours?|minutes?|days?|weeks?)\s*ago$/i.test(lower)
       ) {
         name = txt;
         break;

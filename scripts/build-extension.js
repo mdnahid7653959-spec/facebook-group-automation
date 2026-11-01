@@ -161,10 +161,20 @@ async function buildExtension() {
     builtAt: new Date().toISOString(),
   };
   fs.writeFileSync(path.resolve(distDir, 'build-info.json'), JSON.stringify(buildInfo, null, 2));
-  fs.writeFileSync(path.resolve(rootDir, 'public/build-info.json'), JSON.stringify(buildInfo, null, 2));
-  console.log(`✅ build-info.json written (commit: ${currentShortSha})`);
+  // 5. Create Mobile-ready ZIP archive for Kiwi / Lemur browser
+  console.log('📦 Step 5: Packaging mobile zip archive (AI-Group-Poster-Mobile.zip)...');
+  const zipPath = path.resolve(rootDir, 'AI-Group-Poster-Mobile.zip');
+  try {
+    if (fs.existsSync(zipPath)) {
+      fs.unlinkSync(zipPath);
+    }
+    execSync(`powershell -NoProfile -Command "Compress-Archive -Path '${distDir}\\*' -DestinationPath '${zipPath}' -Force"`);
+    console.log(`✅ Mobile ZIP created at: ${zipPath}`);
+  } catch (zipErr) {
+    console.warn('⚠️ Could not generate zip archive automatically:', zipErr.message);
+  }
 
-  console.log('✨ Build successfully completed! Load unpacked folder: dist/');
+  console.log('✨ Build successfully completed! Load unpacked folder: dist/ or use AI-Group-Poster-Mobile.zip on mobile');
 }
 
 buildExtension().catch(err => {

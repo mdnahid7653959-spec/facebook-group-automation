@@ -54,7 +54,9 @@ import { convertToRichHtml, deduplicateRepeatedCaption } from '../utils/text-sty
       const resp = await origFetch.apply(this, args as any);
       try {
         const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url) || '';
-        if (url.includes('/api/graphql') || url.includes('graphql')) {
+        const pathname = window.location.pathname || '';
+        const isGroupOrSearchPage = pathname.includes('/groups') || pathname.includes('/search');
+        if (isGroupOrSearchPage && (url.includes('/api/graphql') || url.includes('graphql'))) {
           const clone = resp.clone();
           clone.text().then(text => {
             if (text.includes('Group') && (text.includes('/groups/') || text.includes('__typename":"Group"'))) {

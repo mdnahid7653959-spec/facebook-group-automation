@@ -51,7 +51,7 @@ const STORAGE_KEY_COMMIT = 'fb_auto_current_commit_sha';
 const STORAGE_KEY_RELOADED_AT = 'fb_auto_last_reloaded_at';
 
 // Current repo commit as default fallback
-export const DEFAULT_FALLBACK_SHA = '33b84ad5f000c0e7f880c3543f8e8b64650f67dc';
+export const DEFAULT_FALLBACK_SHA = 'a224c66e2538348553a50e6b191ff23ab06f1be2';
 
 // Calculate relative time (e.g. "5m ago", "2h ago", "yesterday")
 export function formatRelativeTime(dateString: string): string {
@@ -98,12 +98,20 @@ export async function getCurrentCommitSha(): Promise<string> {
     // ignore
   }
 
+  // If bakedSha is compiled into the extension, it is the canonical running version
+  if (bakedSha && bakedSha !== '33b84ad5f000c0e7f880c3543f8e8b64650f67dc') {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      chrome.storage.local.set({ [STORAGE_KEY_COMMIT]: bakedSha });
+    }
+    return bakedSha;
+  }
+
   return new Promise((resolve) => {
     if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       chrome.storage.local.get([STORAGE_KEY_COMMIT], (res) => {
         const storedSha = res[STORAGE_KEY_COMMIT];
-        // If stored SHA is the old stale 'a5bb018', override with bakedSha or DEFAULT_FALLBACK_SHA
-        if (storedSha && storedSha !== 'a5bb018') {
+        // If stored SHA is not a stale fallback, use it
+        if (storedSha && storedSha !== 'a5bb018' && storedSha !== '33b84ad5f000c0e7f880c3543f8e8b64650f67dc') {
           resolve(storedSha);
         } else {
           const finalSha = bakedSha || DEFAULT_FALLBACK_SHA;

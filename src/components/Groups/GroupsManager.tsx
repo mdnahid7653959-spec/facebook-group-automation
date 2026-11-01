@@ -22,9 +22,7 @@ import {
   ListPlus,
 } from 'lucide-react';
 import { validateFacebookGroupUrl, detectDuplicateGroup } from '../../utils/validators';
-import { generateId, formatDate } from '../../utils/helpers';
-import { parseGroupsCsv, exportGroupsToCsv, CsvImportSummary } from '../../services/csv/csv-parser';
-import { downloadFile } from '../../utils/helpers';
+import { generateId, formatDate, downloadFile, matchesGroupSearch } from '../../utils/helpers';
 import { useToast } from '../common/Toast';
 
 interface GroupsManagerProps {
@@ -88,12 +86,7 @@ export const GroupsManager: React.FC<GroupsManagerProps> = ({
   const filteredGroups = useMemo(() => {
     return groups
       .filter(g => {
-        const matchesSearch =
-          searchTerm === '' ||
-          g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          g.url.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          (g.location && g.location.toLowerCase().includes(searchTerm.toLowerCase())) ||
-          (g.category && g.category.toLowerCase().includes(searchTerm.toLowerCase()));
+        const matchesSearch = matchesGroupSearch(g, searchTerm);
 
         const matchesStatus = statusFilter === 'ALL' || g.status === statusFilter;
         const matchesCategory = categoryFilter === 'ALL' || g.category === categoryFilter;

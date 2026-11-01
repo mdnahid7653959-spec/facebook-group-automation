@@ -353,13 +353,22 @@ function findComposerTrigger(): HTMLElement | null {
       aria.includes('কিছু লিখুন') ||
       aria.includes('পোস্ট তৈরি করুন') ||
       aria.includes('একটি পাবলিক পোস্ট') ||
+      aria.includes('আপনার মনে কী আছে') ||
+      aria.includes('কী ভাবছেন') ||
+      aria.includes('write discussion') ||
+      aria.includes('start discussion') ||
       txt === 'create a public post...' ||
       txt === 'write something...' ||
       txt === 'create a post...' ||
       txt === 'create post' ||
+      txt === 'write discussion' ||
+      txt === 'discussion' ||
       txt.includes('কিছু লিখুন') ||
       txt.includes('পোস্ট তৈরি করুন') ||
-      txt.includes('পাবলিক পোস্ট')
+      txt.includes('পাবলিক পোস্ট') ||
+      txt.includes('আপনার মনে কী আছে') ||
+      txt.includes('কী ভাবছেন') ||
+      txt.includes('আলোচনা')
     ) {
       if (isElementVisible(el)) return el;
     }
@@ -1125,14 +1134,18 @@ async function attemptAutoJoinGroup(): Promise<{ success: boolean; isInstantMemb
     }
   }
 
-  // Check if user is now an instant member and composer is available
+  // Rapidly poll up to 3500ms for composer or joined indicator, with slight scroll down to ensure composer is rendered
   const startCheck = Date.now();
-  while (Date.now() - startCheck < 2500) {
-    const composerTrigger = findComposerTrigger();
+  while (Date.now() - startCheck < 3500) {
+    let composerTrigger = findComposerTrigger();
     if (composerTrigger && isElementVisible(composerTrigger)) {
       console.log('[AGP:AutoJoin] Instant membership granted! Composer available.');
       showToast('✅ Joined group! Post box ready.', true);
       return { success: true, isInstantMember: true, reason: 'Instant member' };
+    }
+    // Try scrolling down slightly in case composer is below the cover photo
+    if (Date.now() - startCheck > 1000 && window.scrollY < 200) {
+      window.scrollBy({ top: 300, behavior: 'instant' });
     }
     await sleep(25);
   }
@@ -1151,9 +1164,16 @@ async function attemptAutoJoinGroup(): Promise<{ success: boolean; isInstantMemb
     return { success: true, isInstantMember: false, reason: 'Join request pending admin approval' };
   }
 
-  // If join button is no longer present, assume join succeeded
+  // Check if composer is available or button indicates joined
+  const finalComposer = findComposerTrigger();
+  if (finalComposer) {
+    return { success: true, isInstantMember: true, reason: 'Instant member' };
+  }
+
+  // If join button is no longer present, assume join succeeded and proceed to post
   if (!findJoinGroupButton()) {
-    return { success: true, isInstantMember: false, reason: 'Join request submitted' };
+    console.log('[AGP:AutoJoin] Join button disappeared. Group is joined, proceeding to post...');
+    return { success: true, isInstantMember: true, reason: 'Instant member' };
   }
 
   return { success: true, isInstantMember: false, reason: 'Join submitted' };
@@ -1691,13 +1711,29 @@ function renderHelperPanel() {
           bottom: 24px;
           right: 24px;
           width: 360px;
+          max-width: calc(100vw - 24px);
+          max-height: calc(100vh - 32px);
           background: #18191a;
           color: #e4e6eb;
           border-radius: 16px;
           box-shadow: 0 16px 48px -4px rgba(0,0,0,0.8), 0 0 0 1px rgba(255,255,255,0.12);
           z-index: 2147483647;
-          overflow: hidden;
+          overflow-y: auto;
           transition: transform 0.25s ease, opacity 0.2s ease;
+        }
+        @media (max-width: 480px) {
+          .panel-root {
+            bottom: 8px !important;
+            right: 8px !important;
+            left: 8px !important;
+            width: auto !important;
+            max-width: none !important;
+            border-radius: 12px !important;
+          }
+          .launcher-pill {
+            bottom: 12px !important;
+            right: 12px !important;
+          }
         }
         .panel-header {
           display: flex;
@@ -2661,32 +2697,55 @@ function inspectPageAndConnect() {
 /**
  * Displays the sync notification card at the top of the Facebook window (matching reference screenshot).
  */
-function showSyncOverlayBanner() {
+let userRequestedDiscoveryFinish = false;
+
+/**
+ * Displays the sync notification card at the top of the Facebook window (matching reference screenshot).
+ */
+function showSyncOverlayBanner(initialCount: number = 0, targetTotal?: number | null) {
   if (typeof document === 'undefined' || !document.body) return;
 
+  userRequestedDiscoveryFinish = false;
   const existing = document.getElementById('agp-sync-window-overlay');
   if (existing) existing.remove();
 
   const overlay = document.createElement('div');
   overlay.id = 'agp-sync-window-overlay';
   overlay.innerHTML = `
-    <div style="font-weight: 800; font-size: 14px; margin-bottom: 4px; color: #ffffff; letter-spacing: -0.2px;">
-      Syncing your Facebook groups
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #10b981; box-shadow: 0 0 10px #10b981;"></span>
+        <span style="font-weight: 800; font-size: 14px; color: #ffffff; letter-spacing: -0.2px;">
+          Syncing Facebook Groups
+        </span>
+      </div>
+      <div id="agp-sync-counter-badge" style="background: rgba(16, 185, 129, 0.2); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 9999px;">
+        ${initialCount} Found
+      </div>
     </div>
-    <div style="font-size: 12px; color: #cbd5e1; margin-bottom: 2px; font-weight: 500;">
-      Please keep this window open and visible.
+    <div id="agp-sync-status-text" style="font-size: 12px; color: #cbd5e1; margin-bottom: 3px; font-weight: 500;">
+      Scrolling automatically to find all joined groups...
     </div>
-    <div style="font-size: 11px; color: #94a3b8;">
-      It will scroll automatically and close when done.
+    <div style="font-size: 11px; color: #94a3b8; margin-bottom: 12px;">
+      Bangla & English groups are detected. Keep this tab visible.
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button id="agp-sync-finish-btn" type="button" style="flex: 1; background: #10b981; color: #ffffff; font-weight: 700; font-size: 12px; padding: 8px 12px; border-radius: 8px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: 0 2px 8px rgba(16,185,129,0.35);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        Save & Finish Now (<span id="agp-sync-btn-count">${initialCount}</span>)
+      </button>
+      <button id="agp-sync-cancel-btn" type="button" style="background: rgba(255,255,255,0.08); color: #cbd5e1; font-weight: 600; font-size: 12px; padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.12); cursor: pointer;">
+        Cancel
+      </button>
     </div>
   `;
   overlay.style.cssText = `
     position: fixed;
     top: 18px;
-    left: 18px;
-    right: 18px;
-    max-width: 360px;
-    margin: 0 auto;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 380px;
+    max-width: 90vw;
     background: rgba(15, 23, 42, 0.95);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -2697,11 +2756,52 @@ function showSyncOverlayBanner() {
     box-shadow: 0 20px 45px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(99, 102, 241, 0.2);
     z-index: 2147483647;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    pointer-events: none;
+    pointer-events: auto;
     text-align: left;
     line-height: 1.4;
   `;
   document.body.appendChild(overlay);
+
+  // Bind Finish button
+  const finishBtn = document.getElementById('agp-sync-finish-btn');
+  if (finishBtn) {
+    finishBtn.onclick = () => {
+      userRequestedDiscoveryFinish = true;
+      finishBtn.innerHTML = `<span>Saving...</span>`;
+      finishBtn.style.opacity = '0.7';
+      finishBtn.style.pointerEvents = 'none';
+      if (currentScanAbortController) {
+        currentScanAbortController.abort();
+      }
+    };
+  }
+
+  // Bind Cancel button
+  const cancelBtn = document.getElementById('agp-sync-cancel-btn');
+  if (cancelBtn) {
+    cancelBtn.onclick = () => {
+      userRequestedDiscoveryFinish = true;
+      hideSyncOverlayBanner();
+      if (currentScanAbortController) {
+        currentScanAbortController.abort();
+      }
+    };
+  }
+}
+
+function updateSyncOverlayBanner(count: number, targetTotal?: number | null) {
+  const badge = document.getElementById('agp-sync-counter-badge');
+  if (badge) {
+    badge.innerText = targetTotal ? `${count} / ${targetTotal} Found` : `${count} Found`;
+  }
+  const btnCount = document.getElementById('agp-sync-btn-count');
+  if (btnCount) {
+    btnCount.innerText = String(count);
+  }
+  const status = document.getElementById('agp-sync-status-text');
+  if (status && count > 0) {
+    status.innerText = `Found ${count} groups. Scrolling for more...`;
+  }
 }
 
 function hideSyncOverlayBanner() {
@@ -2729,9 +2829,10 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
 
         const result = await performProgressiveGroupScan({
           maxRounds: 350,
-          stagnantLimit: 25,
-          scrollDelayMs: 75,
+          stagnantLimit: 35,
+          scrollDelayMs: 300,
           accountContext,
+          shouldStop: () => userRequestedDiscoveryFinish,
           onBatchDiscovered: async (items, totalSoFar, metrics) => {
             lastDiscoveryMetrics = metrics;
             // Also include intercepted groups from GraphQL responses
@@ -2742,6 +2843,8 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
                 allItems.push(ig as any);
               }
             }
+
+            updateSyncOverlayBanner(allItems.length);
 
             try {
               // Send live batch to background service worker and popup
@@ -2766,6 +2869,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, sender, sendRespo
             lastDiscoveryMetrics = metrics;
             const interceptedCount = interceptedGroups.size;
             const totalCount = Math.max(count, interceptedCount);
+            updateSyncOverlayBanner(totalCount, targetTotal);
             try {
               chrome.runtime.sendMessage({
                 type: 'GROUP_DISCOVERY_PROGRESS',
@@ -3007,11 +3111,14 @@ async function triggerAutoScanIfJoinsPage() {
     // Install interceptor to capture GraphQL group data from infinite scroll
     installGraphQLInterceptor();
 
+    showSyncOverlayBanner(0);
+
     try {
       const result = await performProgressiveGroupScan({
         maxRounds: 350,
-        stagnantLimit: 25,
-        scrollDelayMs: 75,
+        stagnantLimit: 35,
+        scrollDelayMs: 300,
+        shouldStop: () => userRequestedDiscoveryFinish,
         onBatchDiscovered: async (items, totalSoFar) => {
           // Also merge any intercepted groups from GraphQL responses
           const intercepted = getInterceptedGroupsAsDiscovered();
@@ -3021,6 +3128,7 @@ async function triggerAutoScanIfJoinsPage() {
               allItems.push(ig as any);
             }
           }
+          updateSyncOverlayBanner(allItems.length);
           try {
             await mergeDiscoveredGroups(allItems as any, { syncMode: 'merge' });
           } catch (mergeErr) {
@@ -3031,6 +3139,7 @@ async function triggerAutoScanIfJoinsPage() {
           // Include intercepted groups in the count
           const interceptedCount = interceptedGroups.size;
           const totalCount = Math.max(count, interceptedCount);
+          updateSyncOverlayBanner(totalCount, targetTotal);
           showToast(`AI Group Poster: Found ${totalCount}${targetTotal ? ` / ${targetTotal}` : ''} groups...`);
           try {
             chrome.runtime.sendMessage({
@@ -3056,6 +3165,7 @@ async function triggerAutoScanIfJoinsPage() {
       console.warn('[AGP:Content] Auto-scan err:', err);
     } finally {
       isAutoScanningJoins = false;
+      setTimeout(hideSyncOverlayBanner, 1500);
     }
   }
 }
@@ -3099,7 +3209,7 @@ function handleUrlTransition() {
 
 window.addEventListener('popstate', handleUrlTransition, { passive: true });
 window.addEventListener('hashchange', handleUrlTransition, { passive: true });
-setInterval(handleUrlTransition, 40);
+setInterval(handleUrlTransition, 1000);
 
 // Active Posting Keepalive: Prevents Chrome MV3 Service Worker dormancy while posting is running
 setInterval(() => {

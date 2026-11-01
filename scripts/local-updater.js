@@ -110,7 +110,8 @@ const server = http.createServer(async (req, res) => {
     console.log('🔄 [Companion] Received update request from Extension!');
     console.log('📥 Step 1/2: Pulling latest changes from GitHub (git pull origin main)...');
 
-    // Handle unstaged changes safely with autostash
+    // Handle unstaged changes safely: discard tracked dist build files so pull never conflicts
+    await runCommand('git checkout -- dist/');
     const pullRes = await runCommand('git pull --autostash origin main');
     console.log(pullRes.output);
 

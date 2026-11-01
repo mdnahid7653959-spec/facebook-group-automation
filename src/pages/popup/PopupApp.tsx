@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Group, DiscoveryProgress, FacebookAccountInfo } from '../../types/group';
+import { matchesGroupSearch } from '../../utils/helpers';
 import { Post } from '../../types/post';
 import { QueueItem, QueueState } from '../../types/queue';
 import {
@@ -20,6 +21,10 @@ import {
   setAutoJoinState,
   getAutoJoinConfig,
   setAutoJoinConfig,
+  getAllSavedGroups,
+  getAvailableAccountsList,
+  mergeAllAccountsIntoActiveList,
+  resetAllGroupSelections,
 } from '../../services/storage/chrome-storage';
 import {
   createQueueItems,
@@ -133,10 +138,16 @@ export const PopupApp: React.FC = () => {
   });
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [visibleGroupsLimit, setVisibleGroupsLimit] = useState<number>(60);
+  const [customBatchCount, setCustomBatchCount] = useState<string>('10');
   const [selectedIdsOrder, setSelectedIdsOrder] = useState<string[]>([]);
   const [importText, setImportText] = useState('');
   const [importCategory, setImportCategory] = useState('Imported');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setVisibleGroupsLimit(60);
+  }, [searchTerm]);
 
   // Update System State
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -588,8 +599,9 @@ export const PopupApp: React.FC = () => {
 
   // Load storage state
   const loadData = useCallback(async () => {
-    const [acc, g, p, q, qs, dp, ajState, ajConfig] = await Promise.all([
+    const [acc, allSaved, currentAccountGroups, p, q, qs, dp, ajState, ajConfig] = await Promise.all([
       getFacebookAccount(),
+      getAllSavedGroups(),
       getGroups(),
       getPosts(),
       getQueue(),
@@ -599,18 +611,17 @@ export const PopupApp: React.FC = () => {
       getAutoJoinConfig(),
     ]);
 
+    // Always prefer the most comprehensive groups list so groups from other IDs are never hidden!
+    const effectiveGroups = allSaved.length >= currentAccountGroups.length ? allSaved : currentAccountGroups;
+
     // Prune any invalid groups or personal user profiles
-    const cleanedGroups = g.filter(item => {
+    const cleanedGroups = effectiveGroups.filter(item => {
       if (isInvalidNotificationGroup(item)) return false;
       const nm = (item.name || '').trim().toLowerCase();
       if (acc?.name && nm === acc.name.trim().toLowerCase()) return false;
       if (acc?.userId && (item.groupId === acc.userId || item.url.includes(acc.userId))) return false;
       return true;
     });
-
-    if (cleanedGroups.length !== g.length) {
-      setGroups(cleanedGroups);
-    }
 
     const updatedAcc = acc ? { ...acc, totalGroupsCount: cleanedGroups.length } : acc;
     setAccount(updatedAcc);
@@ -628,10 +639,10 @@ export const PopupApp: React.FC = () => {
       setAutoJoinUrl(ajConfig.searchUrl);
     }
 
-    // Initialize selected IDs from stored selected state if empty
+    // Retain only explicitly user-selected IDs that still exist in cleanedGroups (do not auto-select all!)
     setSelectedIdsOrder(prev => {
       if (prev.length === 0) {
-        return cleanedGroups.filter(item => item.selected).map(item => item.id);
+        return [];
       }
       return prev.filter(id => cleanedGroups.some(item => item.id === id));
     });
@@ -744,12 +755,38 @@ export const PopupApp: React.FC = () => {
 
     loadData();
 
-    let storageListener: (() => void) | null = null;
+    let storageListener: ((changes: any, areaName: string) => void) | null = null;
     let messageListener: ((msg: any) => void) | null = null;
+    let storageDebounceTimer: any = null;
+    let messageDebounceTimer: any = null;
+
+    const debouncedLoadData = () => {
+      if (messageDebounceTimer) clearTimeout(messageDebounceTimer);
+      messageDebounceTimer = setTimeout(() => {
+        loadData();
+      }, 350);
+    };
 
     if (typeof chrome !== 'undefined') {
       if (chrome.storage?.onChanged) {
-        storageListener = () => loadData();
+        storageListener = (changes: any, areaName: string) => {
+          if (areaName && areaName !== 'local') return;
+          const relevantKeys = [
+            'agp_groups',
+            'agp_facebook_groups_by_account',
+            'agp_queue',
+            'agp_queue_state',
+            'agp_facebook_account',
+            'agp_auto_join_state',
+          ];
+          const hasRelevant = Object.keys(changes || {}).some(k => relevantKeys.includes(k));
+          if (!hasRelevant) return;
+
+          if (storageDebounceTimer) clearTimeout(storageDebounceTimer);
+          storageDebounceTimer = setTimeout(() => {
+            loadData();
+          }, 350);
+        };
         chrome.storage.onChanged.addListener(storageListener);
       }
 
@@ -764,20 +801,20 @@ export const PopupApp: React.FC = () => {
               foundCount: foundCount || prev.foundCount,
               message: status || prev.message,
             }));
-            loadData();
+            // Only update progress UI, do not reload heavy group list on each tick
           } else if (message?.type === 'GROUP_BATCH_DISCOVERED') {
             const { verifiedCount } = message.payload || {};
             setDiscoveryProgress(prev => ({
               ...prev,
               foundCount: verifiedCount || prev.foundCount,
             }));
-            loadData();
+            debouncedLoadData();
           } else if (message?.type === 'AUTO_JOIN_PROGRESS') {
             if (message.payload) {
               setAutoJoinStateObj(message.payload);
             }
           } else if (message?.type === 'AUTO_JOIN_SAVE_GROUPS') {
-            loadData();
+            debouncedLoadData();
           }
         };
         chrome.runtime.onMessage.addListener(messageListener);
@@ -791,7 +828,7 @@ export const PopupApp: React.FC = () => {
         if (activeTab?.id && activeTab.url && activeTab.url.includes('facebook.com')) {
           chrome.tabs.sendMessage(activeTab.id, { type: 'GET_FACEBOOK_USER_INFO' }, (res) => {
             if (!chrome.runtime.lastError && res?.groups && res.groups.length > 0) {
-              loadData();
+              debouncedLoadData();
             }
           });
         }
@@ -799,6 +836,8 @@ export const PopupApp: React.FC = () => {
     }
 
     return () => {
+      if (storageDebounceTimer) clearTimeout(storageDebounceTimer);
+      if (messageDebounceTimer) clearTimeout(messageDebounceTimer);
       if (storageListener && typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
         chrome.storage.onChanged.removeListener(storageListener);
       }
@@ -877,23 +916,42 @@ export const PopupApp: React.FC = () => {
       updatedAt: Date.now(),
     }));
     await setGroups(updatedGroups);
+    await resetAllGroupSelections();
     setGroupsState(updatedGroups);
+    showToast('Selection cleared (0 selected)');
   };
 
-  // Quick Select 10 / 20 groups
-  const handleSelectBatch = async (count: number) => {
-    const targetGroups = filteredGroups.slice(0, count);
+  // Select batch of groups from current filtered list (supports any custom count & append)
+  const handleSelectBatch = async (count: number, append: boolean = false) => {
+    if (isNaN(count) || count <= 0) {
+      showToast('Please enter a valid number of groups');
+      return;
+    }
+    const num = Math.min(count, filteredGroups.length);
+    if (num === 0) {
+      showToast('No groups match current search');
+      return;
+    }
+    const targetGroups = filteredGroups.slice(0, num);
     const targetIds = targetGroups.map(g => g.id);
-    setSelectedIdsOrder(targetIds);
+
+    let updatedIds: string[];
+    if (append) {
+      updatedIds = Array.from(new Set([...selectedIdsOrder, ...targetIds]));
+    } else {
+      updatedIds = targetIds;
+    }
+
+    setSelectedIdsOrder(updatedIds);
 
     const updatedGroups = groups.map(g => ({
       ...g,
-      selected: targetIds.includes(g.id),
+      selected: updatedIds.includes(g.id),
       updatedAt: Date.now(),
     }));
     await setGroups(updatedGroups);
     setGroupsState(updatedGroups);
-    showToast(`Selected first ${targetIds.length} groups`);
+    showToast(`Selected ${updatedIds.length} groups`);
   };
 
   const handleSaveAsList = async () => {
@@ -1255,11 +1313,7 @@ export const PopupApp: React.FC = () => {
   };
 
   // Filtered groups
-  const filteredGroups = groups.filter(g =>
-    searchTerm === '' ||
-    g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (g.groupId && g.groupId.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredGroups = groups.filter(g => matchesGroupSearch(g, searchTerm));
 
   const selectedCount = selectedIdsOrder.length;
 
@@ -1391,6 +1445,9 @@ export const PopupApp: React.FC = () => {
             >
               <Users size={14} />
               <span>My Groups</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+                {groups.length}
+              </span>
             </button>
 
             <button
@@ -1425,6 +1482,35 @@ export const PopupApp: React.FC = () => {
           {activeTab === 'my-groups' && (
             <div className="p-4 flex-1 overflow-y-auto space-y-2.5">
               
+              {/* Joined Groups Stat Banner */}
+              <div className="flex items-center justify-between p-2.5 bg-gradient-to-r from-blue-50/90 to-indigo-50/80 dark:from-blue-950/40 dark:to-indigo-950/30 border border-blue-100/90 dark:border-blue-900/40 rounded-xl">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-blue-600/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold flex-shrink-0">
+                    <Users size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 truncate">
+                      <span>{groups.length} Facebook Groups Added</span>
+                      {account?.name && (
+                        <span className="text-[10px] font-normal text-slate-400 truncate">({account.name})</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-slate-400 dark:text-slate-500">
+                      {lastSyncedFormatted ? `Last synced: ${lastSyncedFormatted}` : 'Ready for auto-posting'}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-right flex-shrink-0 pl-2">
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    selectedCount > 0
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}>
+                    {selectedCount} Selected
+                  </span>
+                </div>
+              </div>
+
               {/* Blue Sync Button */}
               <button
                 onClick={isDiscovering ? handleCancelSync : handleTriggerFullSync}
@@ -1451,8 +1537,8 @@ export const PopupApp: React.FC = () => {
                     </div>
 
                     <div className="flex items-center justify-between text-[11px] text-blue-600 dark:text-blue-400 font-semibold">
-                      <span>Scanning groups... Found {discoveryProgress.foundCount || groups.length} so far</span>
-                      <span>Found {discoveryProgress.foundCount || groups.length}</span>
+                      <span>Scanning Facebook... Found {discoveryProgress.foundCount || 0} in this scan</span>
+                      <span>Total Saved: {groups.length}</span>
                     </div>
                   </div>
 
@@ -1494,36 +1580,128 @@ export const PopupApp: React.FC = () => {
                     <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
                       type="text"
-                      placeholder="Search groups..."
+                      placeholder="Search groups by name or ID..."
                       value={searchTerm}
                       onChange={e => setSearchTerm(e.target.value)}
-                      className="w-full pl-8 pr-2.5 py-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
+                      className="w-full pl-8 pr-7 py-1.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-lg text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500"
                     />
+                    {searchTerm && (
+                      <button
+                        onClick={() => setSearchTerm('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded"
+                        title="Clear search"
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
                   </div>
 
-                  {/* Controls Row: Select All | 10 | 20 | Clear All */}
-                  <div className="flex items-center justify-between text-[11px] pt-0.5">
-                    <div className="flex items-center gap-1.5 font-medium text-blue-600 dark:text-blue-400">
-                      <button onClick={handleSelectAll} className="hover:underline">
-                        All
-                      </button>
-                      <span className="text-slate-300 dark:text-slate-700">|</span>
-                      <button onClick={() => handleSelectBatch(10)} className="hover:underline" title="Select first 10 groups">
-                        10
-                      </button>
-                      <span className="text-slate-300 dark:text-slate-700">|</span>
-                      <button onClick={() => handleSelectBatch(20)} className="hover:underline" title="Select first 20 groups">
-                        20
-                      </button>
-                      <span className="text-slate-300 dark:text-slate-700">|</span>
-                      <button onClick={handleClearAll} className="hover:underline text-slate-500 dark:text-slate-400">
-                        Clear
-                      </button>
+                  {/* Filter Info & One-Click Selection for Search Results */}
+                  {searchTerm.trim() && (
+                    <div className="flex items-center justify-between px-2.5 py-1.5 bg-blue-50/80 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/50 rounded-lg text-[11px] animate-fadeIn">
+                      <span className="text-blue-700 dark:text-blue-300 font-medium truncate">
+                        Found <strong>{filteredGroups.length}</strong> matching groups
+                      </span>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <button
+                          onClick={() => handleSelectBatch(filteredGroups.length, false)}
+                          className="px-1.5 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[10px] transition-colors"
+                          title="Select all matching groups"
+                        >
+                          Select All ({filteredGroups.length})
+                        </button>
+                        <button
+                          onClick={() => handleSelectBatch(filteredGroups.length, true)}
+                          className="px-1.5 py-0.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded font-bold text-[10px] transition-colors"
+                          title="Add matching groups to current selection"
+                        >
+                          + Add All
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Controls Row: Quick Batch & Custom Count Selection */}
+                  <div className="space-y-1.5 pt-0.5">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <div className="flex items-center gap-1 font-medium text-blue-600 dark:text-blue-400">
+                        <button onClick={handleSelectAll} className="hover:underline font-bold" title="Select all groups">
+                          All
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button onClick={() => handleSelectBatch(5)} className="hover:underline" title="Select first 5 groups">
+                          5
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button onClick={() => handleSelectBatch(10)} className="hover:underline" title="Select first 10 groups">
+                          10
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button onClick={() => handleSelectBatch(20)} className="hover:underline" title="Select first 20 groups">
+                          20
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button onClick={() => handleSelectBatch(50)} className="hover:underline" title="Select first 50 groups">
+                          50
+                        </button>
+                        <span className="text-slate-300 dark:text-slate-700">|</span>
+                        <button onClick={handleClearAll} className="hover:underline text-rose-500 dark:text-rose-400 font-medium">
+                          Clear
+                        </button>
+                      </div>
+
+                      <span className="text-slate-500 dark:text-slate-400 font-semibold text-[11px]">
+                        Selected {selectedCount}/{filteredGroups.length !== groups.length ? `${filteredGroups.length} (${groups.length} total)` : groups.length}
+                      </span>
                     </div>
 
-                    <span className="text-slate-500 dark:text-slate-400 font-medium">
-                      Selected {selectedCount}/{groups.length}
-                    </span>
+                    {/* Custom Number Selection Box */}
+                    <div className="flex items-center justify-between gap-2 px-2.5 py-1 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200/70 dark:border-slate-700/50 text-[11px]">
+                      <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 font-medium">
+                        <span>Select any:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          max={filteredGroups.length || 1}
+                          value={customBatchCount}
+                          onChange={e => setCustomBatchCount(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                              const count = parseInt(customBatchCount, 10);
+                              if (!isNaN(count)) handleSelectBatch(count, false);
+                            }
+                          }}
+                          placeholder="Qty"
+                          className="w-14 px-1.5 py-0.5 text-center font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded text-xs focus:outline-none focus:border-blue-500"
+                        />
+                        <span className="text-slate-400 text-[10px]">groups</span>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            const count = parseInt(customBatchCount, 10);
+                            if (!isNaN(count)) handleSelectBatch(count, false);
+                            else showToast('Please enter a number');
+                          }}
+                          className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[10px] shadow-xs transition-colors"
+                          title="Select first N groups from current list"
+                        >
+                          Select
+                        </button>
+                        <button
+                          onClick={() => {
+                            const count = parseInt(customBatchCount, 10);
+                            if (!isNaN(count)) handleSelectBatch(count, true);
+                            else showToast('Please enter a number');
+                          }}
+                          className="px-2 py-0.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded font-bold text-[10px] transition-colors"
+                          title="Add first N groups to current selection"
+                        >
+                          + Add
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Helper text */}
@@ -1532,17 +1710,26 @@ export const PopupApp: React.FC = () => {
                   </div>
 
                   {/* Group List */}
-                  <div className="max-h-[170px] overflow-y-auto space-y-1 pr-1 divide-y divide-slate-100 dark:divide-slate-800/60">
+                  <div
+                    onScroll={e => {
+                      const el = e.currentTarget;
+                      if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
+                        setVisibleGroupsLimit(prev => Math.min(prev + 60, filteredGroups.length));
+                      }
+                    }}
+                    className="max-h-[170px] overflow-y-auto space-y-1 pr-1 divide-y divide-slate-100 dark:divide-slate-800/60"
+                  >
                     {filteredGroups.length === 0 ? (
                       <div className="py-4 text-center text-xs text-slate-400">
                         No groups match "{searchTerm}"
                       </div>
                     ) : (
-                      filteredGroups.map(group => {
-                        const isSelected = selectedIdsOrder.includes(group.id);
-                        const orderIndex = selectedIdsOrder.indexOf(group.id) + 1;
+                      <>
+                        {filteredGroups.slice(0, visibleGroupsLimit).map(group => {
+                          const isSelected = selectedIdsOrder.includes(group.id);
+                          const orderIndex = selectedIdsOrder.indexOf(group.id) + 1;
 
-                        return (
+                          return (
                             <div
                               key={group.id}
                               onClick={() => handleToggleGroup(group)}
@@ -1605,8 +1792,14 @@ export const PopupApp: React.FC = () => {
                                 <Trash2 size={12} />
                               </button>
                             </div>
-                        );
-                      })
+                          );
+                        })}
+                        {visibleGroupsLimit < filteredGroups.length && (
+                          <div className="py-1 text-center text-[10px] text-slate-400 font-medium">
+                            Showing {visibleGroupsLimit} of {filteredGroups.length} groups (scroll to load more)
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 </>

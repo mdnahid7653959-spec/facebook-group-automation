@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Group } from '../../types/group';
 import {
   Users,
@@ -12,12 +12,21 @@ import {
   Layers,
   ClipboardPaste,
   Copy,
+  Globe,
 } from 'lucide-react';
 import { getDiscoveryProgress } from '../../services/facebook/discovery-manager';
-import { getFacebookAccount, setGroups } from '../../services/storage/chrome-storage';
+import {
+  getFacebookAccount,
+  setGroups,
+  getAllSavedGroups,
+  getAvailableAccountsList,
+  mergeAllAccountsIntoActiveList,
+  getGroups,
+  resetAllGroupSelections,
+} from '../../services/storage/chrome-storage';
 import { useToast } from '../common/Toast';
 import { validateFacebookGroupUrl } from '../../utils/validators';
-import { generateId } from '../../utils/helpers';
+import { generateId, matchesGroupSearch } from '../../utils/helpers';
 import { UpdateModal } from '../common/UpdateModal';
 import {
   parseBulkGroupText,
@@ -48,7 +57,14 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<'my-groups' | 'import-links'>('my-groups');
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedIdsOrder, setSelectedIdsOrder] = useState<string[]>(initialSelectedIds);
+  const [customBatchCount, setCustomBatchCount] = useState<string>('10');
+  const [selectedIdsOrder, setSelectedIdsOrder] = useState<string[]>([]);
+  const [visibleLimit, setVisibleLimit] = useState<number>(60);
+  const hasInitializedSelection = useRef(false);
+
+  useEffect(() => {
+    setVisibleLimit(60);
+  }, [searchTerm]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [foundCount, setFoundCount] = useState<number>(0);
@@ -56,17 +72,61 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
   const [importCategory, setImportCategory] = useState('Imported');
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
-  // Sync initial selected IDs when modal opens
+  // Multi-account management
+  const [availableAccounts, setAvailableAccounts] = useState<Array<{ key: string; name: string; count: number }>>([]);
+  const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all');
+  const [modalGroups, setModalGroups] = useState<Group[]>(groups);
+
+  // Sync initial groups and accounts when modal opens or groups change
   useEffect(() => {
     if (isOpen) {
-      if (initialSelectedIds && initialSelectedIds.length > 0) {
+      getAvailableAccountsList().then(list => setAvailableAccounts(list));
+      getAllSavedGroups().then(all => {
+        if (all.length >= groups.length && all.length > 0) {
+          setModalGroups(all);
+        } else {
+          setModalGroups(groups);
+        }
+      });
+    }
+  }, [isOpen, groups]);
+
+  // Only initialize selection once when modal opens (never auto-select all groups!)
+  useEffect(() => {
+    if (isOpen && !hasInitializedSelection.current) {
+      hasInitializedSelection.current = true;
+      // Only keep initialSelectedIds if it was an explicit small user selection (<= 100)
+      if (initialSelectedIds && initialSelectedIds.length > 0 && initialSelectedIds.length <= 100) {
         setSelectedIdsOrder(initialSelectedIds);
       } else {
-        const currentlySelected = groups.filter(g => g.selected).map(g => g.id);
-        setSelectedIdsOrder(currentlySelected);
+        setSelectedIdsOrder([]);
       }
     }
-  }, [isOpen, initialSelectedIds, groups]);
+    if (!isOpen) {
+      hasInitializedSelection.current = false;
+    }
+  }, [isOpen]);
+
+  const handleAccountFilterChange = async (key: string) => {
+    setSelectedAccountFilter(key);
+    if (key === 'all') {
+      const all = await getAllSavedGroups();
+      setModalGroups(all.length >= groups.length ? all : groups);
+    } else {
+      const accG = await getGroups(key);
+      setModalGroups(accG);
+    }
+  };
+
+  const handleMergeAllAccounts = async () => {
+    const res = await mergeAllAccountsIntoActiveList();
+    if (onSaveGroups) {
+      await onSaveGroups(res.totalGroups);
+    }
+    setModalGroups(res.totalGroups);
+    setSelectedAccountFilter('all');
+    toast.success(`🎉 Merged ${res.mergedCount} groups from all accounts!`);
+  };
 
   // Load initial discovery progress & last synced time
   useEffect(() => {
@@ -160,23 +220,40 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
     });
   };
 
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
     setSelectedIdsOrder([]);
+    await resetAllGroupSelections();
+    if (onSaveGroups) {
+      const unselected = modalGroups.map(g => ({ ...g, selected: false }));
+      await onSaveGroups(unselected);
+    }
+    toast.info('Cleared selection (0 selected)');
   };
 
-  // Quick Select 10 / 20 groups
-  const handleSelectBatch = (count: number) => {
-    const targetGroups = filteredGroups.slice(0, count);
+  // Quick / custom select batch of groups from current filtered list
+  const handleSelectBatch = (count: number, append: boolean = false) => {
+    if (isNaN(count) || count <= 0) {
+      toast.warning('Please enter a valid number of groups');
+      return;
+    }
+    const num = Math.min(count, filteredGroups.length);
+    if (num === 0) {
+      toast.warning('No groups match current search');
+      return;
+    }
+    const targetGroups = filteredGroups.slice(0, num);
     const ids = targetGroups.map(g => g.id);
-    setSelectedIdsOrder(ids);
+
+    if (append) {
+      setSelectedIdsOrder(prev => Array.from(new Set([...prev, ...ids])));
+    } else {
+      setSelectedIdsOrder(ids);
+    }
+    toast.success(`Selected ${ids.length} groups`);
   };
 
   // Filter groups
-  const filteredGroups = groups.filter(g =>
-    searchTerm === '' ||
-    g.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (g.groupId && g.groupId.toLowerCase().includes(searchTerm.toLowerCase()))
-  );
+  const filteredGroups = modalGroups.filter(g => matchesGroupSearch(g, searchTerm));
 
   const selectedCount = selectedIdsOrder.length;
 
@@ -184,13 +261,13 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
   const handleConfirm = async () => {
     const orderedGroups: Group[] = [];
     selectedIdsOrder.forEach(id => {
-      const found = groups.find(g => g.id === id);
+      const found = modalGroups.find(g => g.id === id);
       if (found) orderedGroups.push(found);
     });
 
     // Update 'selected' state in storage if save handler provided
     if (onSaveGroups) {
-      const updated = groups.map(g => ({
+      const updated = modalGroups.map(g => ({
         ...g,
         selected: selectedIdsOrder.includes(g.id),
       }));
@@ -328,6 +405,9 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
           >
             <Users size={16} />
             <span>My Groups</span>
+            <span className="px-1.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+              {modalGroups.length}
+            </span>
           </button>
 
           <button
@@ -347,6 +427,78 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
         {activeTab === 'my-groups' && (
           <div className="p-4 flex-1 overflow-y-auto space-y-3">
             
+            {/* Joined Groups Stat Banner */}
+            <div className="flex items-center justify-between p-3 bg-gradient-to-r from-blue-50/90 to-indigo-50/80 dark:from-blue-950/40 dark:to-indigo-950/30 border border-blue-100/90 dark:border-blue-900/40 rounded-xl">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-blue-600/10 text-blue-600 dark:text-blue-400 flex items-center justify-center font-bold flex-shrink-0">
+                  <Users size={16} />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-slate-800 dark:text-slate-100 flex items-center gap-1.5 truncate">
+                    <span>{modalGroups.length} Facebook Groups Added</span>
+                  </div>
+                  <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                    {formattedLastSynced ? `Last synced: ${formattedLastSynced}` : 'Ready for auto-posting'}
+                  </div>
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0 pl-2">
+                <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                  selectedCount > 0
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                }`}>
+                  {selectedCount} Selected
+                </span>
+              </div>
+            </div>
+
+            {/* Multi-Account Selector Bar (When groups from other IDs exist) */}
+            {availableAccounts.length > 1 && (
+              <div className="flex items-center justify-between p-2.5 bg-slate-100 dark:bg-slate-800/90 border border-slate-200 dark:border-slate-700/80 rounded-xl text-xs gap-2">
+                <div className="flex items-center gap-1.5 flex-wrap flex-1 min-w-0">
+                  <Globe size={14} className="text-blue-500 flex-shrink-0" />
+                  <span className="font-semibold text-slate-500 dark:text-slate-400 flex-shrink-0">ID:</span>
+                  <button
+                    type="button"
+                    onClick={() => handleAccountFilterChange('all')}
+                    className={`px-2 py-0.5 rounded-lg font-bold transition-all ${
+                      selectedAccountFilter === 'all'
+                        ? 'bg-blue-600 text-white shadow-sm'
+                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
+                    }`}
+                  >
+                    🌐 All Accounts ({modalGroups.length})
+                  </button>
+                  {availableAccounts.map(acc => (
+                    <button
+                      key={acc.key}
+                      type="button"
+                      onClick={() => handleAccountFilterChange(acc.key)}
+                      className={`px-2 py-0.5 rounded-lg font-bold transition-all truncate max-w-[140px] ${
+                        selectedAccountFilter === acc.key
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
+                      }`}
+                      title={acc.name}
+                    >
+                      👤 {acc.name} ({acc.count})
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleMergeAllAccounts}
+                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors flex items-center gap-1 shadow-sm text-[11px] flex-shrink-0"
+                  title="Merge groups from all IDs into a single list"
+                >
+                  <Layers size={12} />
+                  <span>Merge All</span>
+                </button>
+              </div>
+            )}
+
             {/* Sync from Facebook Blue Button */}
             <button
               onClick={isSyncing ? handleCancelSync : handleStartSync}
@@ -375,8 +527,8 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
                   </div>
 
                   <div className="flex items-center justify-between text-xs text-blue-600 dark:text-blue-400 font-medium">
-                    <span>Scanning groups... Found {foundCount} so far</span>
-                    <span>Found {foundCount}</span>
+                    <span>Scanning groups... Found {foundCount} in this scan</span>
+                    <span>Total Saved: {modalGroups.length}</span>
                   </div>
                 </div>
 
@@ -399,7 +551,7 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
             )}
 
             {/* Empty state when 0 groups and not syncing */}
-            {groups.length === 0 && !isSyncing ? (
+            {modalGroups.length === 0 && !isSyncing ? (
               <div className="py-12 px-4 text-center space-y-3">
                 <div className="w-14 h-14 mx-auto rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400">
                   <Users size={28} />
@@ -413,41 +565,133 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
               </div>
             ) : (
               <>
-                {/* Search Bar */}
+                {/* Search Bar with Clear Button */}
                 <div className="relative">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Search groups..."
+                    placeholder="Search groups by name or ID..."
                     value={searchTerm}
                     onChange={e => setSearchTerm(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                    className="w-full pl-9 pr-7 py-2 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl text-xs text-slate-800 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                   />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded"
+                      title="Clear search"
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
                 </div>
 
-                {/* Controls Row: Select All | 10 | 20 | Clear All & Groups count */}
-                <div className="flex items-center justify-between text-xs pt-1">
-                  <div className="flex items-center gap-1.5 font-medium text-blue-600 dark:text-blue-400">
-                    <button onClick={handleSelectAll} className="hover:underline">
-                      All
-                    </button>
-                    <span className="text-slate-300 dark:text-slate-700">|</span>
-                    <button onClick={() => handleSelectBatch(10)} className="hover:underline" title="Select first 10 groups">
-                      10
-                    </button>
-                    <span className="text-slate-300 dark:text-slate-700">|</span>
-                    <button onClick={() => handleSelectBatch(20)} className="hover:underline" title="Select first 20 groups">
-                      20
-                    </button>
-                    <span className="text-slate-300 dark:text-slate-700">|</span>
-                    <button onClick={handleClearAll} className="hover:underline text-slate-500 dark:text-slate-400">
-                      Clear
-                    </button>
+                {/* Filter info & One-Click Selection for Search Results */}
+                {searchTerm.trim() && (
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-blue-50/80 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-900/50 rounded-xl text-xs animate-fadeIn">
+                    <span className="text-blue-700 dark:text-blue-300 font-medium truncate">
+                      Found <strong>{filteredGroups.length}</strong> matching groups
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => handleSelectBatch(filteredGroups.length, false)}
+                        className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded font-bold text-[11px] transition-colors"
+                        title="Select all matching groups"
+                      >
+                        Select All ({filteredGroups.length})
+                      </button>
+                      <button
+                        onClick={() => handleSelectBatch(filteredGroups.length, true)}
+                        className="px-2 py-0.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded font-bold text-[11px] transition-colors"
+                        title="Add matching groups to existing selection"
+                      >
+                        + Add All
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Controls Row: Quick Batch & Custom Count Selection */}
+                <div className="space-y-1.5 pt-0.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5 font-medium text-blue-600 dark:text-blue-400">
+                      <button onClick={handleSelectAll} className="hover:underline font-bold" title="Select all groups">
+                        All
+                      </button>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <button onClick={() => handleSelectBatch(5)} className="hover:underline" title="Select first 5 groups">
+                        5
+                      </button>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <button onClick={() => handleSelectBatch(10)} className="hover:underline" title="Select first 10 groups">
+                        10
+                      </button>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <button onClick={() => handleSelectBatch(20)} className="hover:underline" title="Select first 20 groups">
+                        20
+                      </button>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <button onClick={() => handleSelectBatch(50)} className="hover:underline" title="Select first 50 groups">
+                        50
+                      </button>
+                      <span className="text-slate-300 dark:text-slate-700">|</span>
+                      <button onClick={handleClearAll} className="hover:underline text-rose-500 dark:text-rose-400 font-medium">
+                        Clear
+                      </button>
+                    </div>
+
+                    <span className="text-slate-500 dark:text-slate-400 text-xs font-semibold">
+                      Selected {selectedCount}/{filteredGroups.length !== modalGroups.length ? `${filteredGroups.length} (${modalGroups.length} total)` : modalGroups.length}
+                    </span>
                   </div>
 
-                  <span className="text-slate-500 dark:text-slate-400 text-xs">
-                    Selected {selectedCount}/{groups.length}
-                  </span>
+                  {/* Custom Number Selection Box */}
+                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200/70 dark:border-slate-700/50 text-xs">
+                    <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 font-medium">
+                      <span>Select any:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={filteredGroups.length || 1}
+                        value={customBatchCount}
+                        onChange={e => setCustomBatchCount(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            const count = parseInt(customBatchCount, 10);
+                            if (!isNaN(count)) handleSelectBatch(count, false);
+                          }
+                        }}
+                        placeholder="Qty"
+                        className="w-16 px-2 py-0.5 text-center font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg text-xs focus:outline-none focus:border-blue-500"
+                      />
+                      <span className="text-slate-400 text-[11px]">groups</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => {
+                          const count = parseInt(customBatchCount, 10);
+                          if (!isNaN(count)) handleSelectBatch(count, false);
+                          else toast.warning('Please enter a number');
+                        }}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs shadow-xs transition-colors"
+                        title="Select first N groups from current list"
+                      >
+                        Select
+                      </button>
+                      <button
+                        onClick={() => {
+                          const count = parseInt(customBatchCount, 10);
+                          if (!isNaN(count)) handleSelectBatch(count, true);
+                          else toast.warning('Please enter a number');
+                        }}
+                        className="px-2.5 py-1 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200 rounded-lg font-bold text-xs transition-colors"
+                        title="Add first N groups to current selection"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Selection order becomes posting order note */}
@@ -456,72 +700,87 @@ export const SelectGroupsModal: React.FC<SelectGroupsModalProps> = ({
                 </div>
 
                 {/* Scrollable Groups List */}
-                <div className="max-h-[260px] overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800/60">
+                <div
+                  onScroll={e => {
+                    const el = e.currentTarget;
+                    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120) {
+                      setVisibleLimit(prev => Math.min(prev + 60, filteredGroups.length));
+                    }
+                  }}
+                  className="max-h-[260px] overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-100 dark:divide-slate-800/60"
+                >
                   {filteredGroups.length === 0 ? (
                     <div className="py-6 text-center text-xs text-slate-400">
                       No groups match "{searchTerm}"
                     </div>
                   ) : (
-                    filteredGroups.map(group => {
-                      const isSelected = selectedIdsOrder.includes(group.id);
-                      const orderIndex = selectedIdsOrder.indexOf(group.id) + 1;
+                    <>
+                      {filteredGroups.slice(0, visibleLimit).map(group => {
+                        const isSelected = selectedIdsOrder.includes(group.id);
+                        const orderIndex = selectedIdsOrder.indexOf(group.id) + 1;
 
-                      return (
-                        <div
-                          key={group.id}
-                          onClick={() => handleToggleSelect(group.id)}
-                          className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-colors ${
-                            isSelected
-                              ? 'bg-blue-50/60 dark:bg-blue-950/30'
-                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
-                          }`}
-                        >
-                          {/* Checkbox */}
+                        return (
                           <div
-                            className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                            key={group.id}
+                            onClick={() => handleToggleSelect(group.id)}
+                            className={`flex items-center gap-3 p-2 rounded-xl cursor-pointer transition-colors ${
                               isSelected
-                                ? 'bg-blue-600 border-blue-600 text-white'
-                                : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800'
+                                ? 'bg-blue-50/60 dark:bg-blue-950/30'
+                                : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                             }`}
                           >
-                            {isSelected && <Check size={11} strokeWidth={3} />}
-                          </div>
-
-                          {/* Group Image */}
-                          {group.imageUrl ? (
-                            <img
-                              src={group.imageUrl}
-                              alt={group.name}
-                              className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 flex-shrink-0 bg-slate-100"
-                              onError={e => {
-                                (e.currentTarget as HTMLElement).style.display = 'none';
-                              }}
-                            />
-                          ) : (
-                            <div className="w-9 h-9 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-slate-600 dark:text-slate-300 text-xs flex-shrink-0">
-                              {group.name ? group.name.charAt(0).toUpperCase() : 'G'}
+                            {/* Checkbox */}
+                            <div
+                              className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                                isSelected
+                                  ? 'bg-blue-600 border-blue-600 text-white'
+                                  : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800'
+                              }`}
+                            >
+                              {isSelected && <Check size={11} strokeWidth={3} />}
                             </div>
-                          )}
 
-                          {/* Group Name & Order Badge */}
-                          <div className="flex-1 min-w-0 flex items-center gap-1.5">
-                            <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate" title={group.name}>
-                              {group.name}
+                            {/* Group Image */}
+                            {group.imageUrl ? (
+                              <img
+                                src={group.imageUrl}
+                                alt={group.name}
+                                className="w-9 h-9 rounded-full object-cover border border-slate-200 dark:border-slate-700 flex-shrink-0 bg-slate-100"
+                                onError={e => {
+                                  (e.currentTarget as HTMLElement).style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <div className="w-9 h-9 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center font-bold text-slate-600 dark:text-slate-300 text-xs flex-shrink-0">
+                                {group.name ? group.name.charAt(0).toUpperCase() : 'G'}
+                              </div>
+                            )}
+
+                            {/* Group Name & Order Badge */}
+                            <div className="flex-1 min-w-0 flex items-center gap-1.5">
+                              <div className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate" title={group.name}>
+                                {group.name}
+                              </div>
+                              {group.verified && (
+                                <CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0" />
+                              )}
                             </div>
-                            {group.verified && (
-                              <CheckCircle2 size={13} className="text-emerald-500 flex-shrink-0" />
+
+                            {/* Order Index if selected */}
+                            {isSelected && (
+                              <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                                #{orderIndex}
+                              </span>
                             )}
                           </div>
-
-                          {/* Order Index if selected */}
-                          {isSelected && (
-                            <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950 px-1.5 py-0.5 rounded-full flex-shrink-0">
-                              #{orderIndex}
-                            </span>
-                          )}
+                        );
+                      })}
+                      {visibleLimit < filteredGroups.length && (
+                        <div className="py-2 text-center text-[10px] text-slate-400 font-medium">
+                          Showing {visibleLimit} of {filteredGroups.length} groups (scroll to load more)
                         </div>
-                      );
-                    })
+                      )}
+                    </>
                   )}
                 </div>
               </>
