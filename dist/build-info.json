@@ -1,8 +1,8 @@
 {
-  "version": "1.0.2",
-  "commitSha": "af61b904bf79d363b8d60c4aa301b4c6e94916a4",
-  "shortSha": "af61b90",
-  "message": "feat: add photo/video dual upload, rich caption styling toolbar, and live FB preview",
-  "commitDate": "2026-11-04T22:38:00+06:00",
-  "builtAt": "2026-11-04T22:55:00.000Z"
+  "version": "1.0.1",
+  "commitSha": "bba3d306f040407d85f3217bb1727b957298fe2f",
+  "shortSha": "bba3d30",
+  "message": "fix: simplify extension updater with 1-click direct update, remove github jargon and companion bridge requirements",
+  "commitDate": "2026-11-04T23:01:24+06:00",
+  "builtAt": "2026-11-04T17:45:03.172Z"
 }
