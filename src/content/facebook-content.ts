@@ -859,7 +859,7 @@ async function attachPhotosToDialog(dialog: HTMLElement, mediaList: string[]): P
   if (!mediaList || mediaList.length === 0) return true;
 
   const hasVideo = mediaList.some(
-    m => m.includes('video') || m.includes('.mp4') || m.includes('.mov') || m.includes('.webm')
+    m => m.includes('video') || m.includes('.mp4') || m.includes('.mov') || m.includes('.webm') || m.includes('data:video')
   );
 
   // 1. Look for existing file input
@@ -920,7 +920,7 @@ async function attachPhotosToDialog(dialog: HTMLElement, mediaList: string[]): P
   fileInput.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
 
   // 5. Wait for Facebook media preview to appear (break immediately as soon as preview is mounted!)
-  const maxWait = 4000;
+  const maxWait = hasVideo ? 12000 : 4000;
   const startWait = Date.now();
   while (Date.now() - startWait < maxWait) {
     const uploadErr = checkForUploadError(dialog);
@@ -1258,6 +1258,7 @@ async function autoSkipCurrentGroup(reason: string) {
  */
 async function findAndClickPostButton(dialog: HTMLElement, timeoutMs = 15000): Promise<boolean> {
   const start = Date.now();
+  let lastStatusUpdate = 0;
   while (Date.now() - start < timeoutMs) {
     const dialogs = [dialog, ...Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'))];
     for (const d of dialogs) {
@@ -1308,7 +1309,17 @@ async function findAndClickPostButton(dialog: HTMLElement, timeoutMs = 15000): P
         }
       }
     }
-    await sleep(10);
+
+    if (Date.now() - lastStatusUpdate > 2500) {
+      lastStatusUpdate = Date.now();
+      const elapsedSec = Math.round((Date.now() - start) / 1000);
+      if (elapsedSec >= 4) {
+        autoPostStatus = `⚡ Step 4/4: Media processing & uploading (${elapsedSec}s)...`;
+        renderHelperPanel();
+      }
+    }
+
+    await sleep(20);
   }
   return false;
 }
@@ -1397,10 +1408,21 @@ async function runAutomatedPostingRoutine() {
     const hasVideo = media.some(
       m => m.includes('video') || m.includes('.mp4') || m.includes('.mov') || m.includes('.webm') || m.includes('data:video')
     );
+    const photoCount = media.filter(
+      m => !m.includes('video') && !m.includes('.mp4') && !m.includes('.mov') && !m.includes('.webm') && !m.includes('data:video')
+    ).length;
+    const videoCount = media.length - photoCount;
+
     if (media.length > 0) {
-      autoPostStatus = hasVideo
-        ? `⚡ Step 3/4: Attaching video (${media.length} files)...`
-        : `⚡ Step 3/4: Attaching ${media.length} photos...`;
+      let mediaLabel = `${media.length} files`;
+      if (photoCount > 0 && videoCount > 0) {
+        mediaLabel = `${photoCount} photos + ${videoCount} video`;
+      } else if (videoCount > 0) {
+        mediaLabel = `${videoCount} video`;
+      } else {
+        mediaLabel = `${photoCount} photos`;
+      }
+      autoPostStatus = `⚡ Step 3/4: Attaching ${mediaLabel}...`;
       renderHelperPanel();
       const attached = await attachPhotosToDialog(dialog, media);
       if (!attached) {
@@ -1417,9 +1439,11 @@ async function runAutomatedPostingRoutine() {
     }
 
     // 4. Click Submit Post button INSTANTLY as soon as ready!
-    autoPostStatus = '⚡ Step 4/4: Submitting post...';
+    autoPostStatus = hasVideo
+      ? '⚡ Step 4/4: Video uploading & submitting post... (ভিডিও আপলোড হচ্ছে)'
+      : '⚡ Step 4/4: Submitting post...';
     renderHelperPanel();
-    const timeout = 15000;
+    const timeout = hasVideo ? 90000 : 20000;
     const clicked = await findAndClickPostButton(dialog, timeout);
     if (!clicked) {
       const uploadErr = checkForUploadError(dialog);
@@ -1437,7 +1461,7 @@ async function runAutomatedPostingRoutine() {
 
     const subStart = Date.now();
     let postFinished = false;
-    const maxWaitMs = 3500;
+    const maxWaitMs = hasVideo ? 25000 : 3500;
 
     while (Date.now() - subStart < maxWaitMs) {
       const currentDialog = findOpenPostDialog();

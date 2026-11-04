@@ -8,6 +8,20 @@ import { getGroups, setGroups, getPosts, setPosts } from '../storage/chrome-stor
 import { generateId } from '../../utils/helpers';
 import { Group } from '../../types/group';
 import { Post } from '../../types/post';
+import {
+  FontStyleType,
+  applyTextStyle,
+  applyHeading,
+  applyBold,
+  applyItalic,
+  applyBulletList,
+  applyNumberedList,
+  applyBlockquote,
+  autoBeautifyCaption,
+  htmlToStyledText,
+  SALES_SNIPPETS,
+  DECORATIVE_DIVIDERS,
+} from '../../utils/text-styler';
 
 let autoJoinContainer: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
@@ -15,6 +29,8 @@ let shadowRoot: ShadowRoot | null = null;
 // Local persistent draft state
 let draftCaption = '';
 let draftPhotos: string[] = [];
+let isUploadingMedia = false;
+let showLivePreview = false;
 let activeTab: 'POST_AND_JOIN' | 'JOIN_ONLY' = 'POST_AND_JOIN';
 let targetGroupCount = 0; // 0 = all
 let pacingDelaySec = 5;
@@ -51,19 +67,47 @@ let campaignState: CampaignState = {
 let campaignPollTimer: any = null;
 
 /**
- * Converts a File object into a compressed base64 Data URL string.
- * Resizes large camera photos down to max 1280px with jpeg compression
- * to keep memory and storage lean and avoid quota limits.
+ * Helper to determine if a media URL represents a video.
+ */
+export function isVideoMedia(url: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  return (
+    url.startsWith('data:video') ||
+    url.includes('video/') ||
+    url.startsWith('blob:') ||
+    /\.(mp4|mov|webm|m4v|mkv|avi)($|\?)/i.test(url)
+  );
+}
+
+/**
+ * Converts a File object (Photo or Video) into a usable Data URL string.
+ * Photos are auto-scaled and compressed as JPEG to keep memory lightweight.
+ * Videos (MP4, MOV, WEBM, MKV, M4V) are preserved with accurate video MIME headers.
  */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve) => {
-    if (file.type.startsWith('video/')) {
+    const isVideo =
+      file.type.startsWith('video/') ||
+      /\.(mp4|mov|webm|m4v|mkv|avi|3gp|flv)$/i.test(file.name);
+
+    if (isVideo) {
       const reader = new FileReader();
-      reader.onload = (e) => resolve((e.target?.result as string) || '');
+      reader.onload = (e) => {
+        let res = (e.target?.result as string) || '';
+        if (res && (res.startsWith('data:application/octet-stream') || res.startsWith('data:;base64'))) {
+          let mime = 'video/mp4';
+          if (/\.webm$/i.test(file.name)) mime = 'video/webm';
+          else if (/\.mov$/i.test(file.name)) mime = 'video/quicktime';
+          else if (/\.mkv$/i.test(file.name)) mime = 'video/x-matroska';
+          res = res.replace(/^data:[^;]*;base64/, `data:${mime};base64`);
+        }
+        resolve(res);
+      };
       reader.onerror = () => resolve('');
       reader.readAsDataURL(file);
       return;
     }
+
     const reader = new FileReader();
     reader.onload = (e) => {
       const rawUrl = (e.target?.result as string) || '';
@@ -149,6 +193,96 @@ async function loadDraftFromStorage() {
   } catch (err) {
     console.warn('[AGP:SearchPoster] Failed to load draft from storage:', err);
   }
+}
+
+/**
+ * Shows temporary toast message inside the shadow root dock.
+ */
+function showDockToast(msg: string) {
+  if (!shadowRoot) return;
+  const old = shadowRoot.getElementById('agp-dock-toast');
+  if (old) old.remove();
+  const t = document.createElement('div');
+  t.id = 'agp-dock-toast';
+  t.textContent = msg;
+  t.style.cssText = `
+    position: absolute;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid #3b82f6;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 20px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    z-index: 1000;
+    pointer-events: none;
+    animation: fadeInOut 2.2s forwards;
+  `;
+  shadowRoot.appendChild(t);
+  setTimeout(() => t.remove(), 2200);
+}
+
+/**
+ * Renders live Facebook post preview HTML from markdown/Unicode caption.
+ */
+function renderPreviewCaptionHtml(caption: string): string {
+  if (!caption || !caption.trim()) {
+    return '<span style="color: #94a3b8; font-style: italic;">পোস্টের কোনো ক্যাপশন লেখা হয়নি। উপরে টুলবার দিয়ে ডিজাইন করুন অথবা টেক্সট পেস্ট করুন...</span>';
+  }
+  const escapeHtml = (str: string) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const formatInline = (text: string) => {
+    let out = escapeHtml(text);
+    out = out.replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight: 800; color: #ffffff;">$1</strong>');
+    out = out.replace(/\*([^*\n]+?)\*/g, '<em style="font-style: italic; color: #f1f5f9;">$1</em>');
+    out = out.replace(/~~(.+?)~~/g, '<s style="color: #94a3b8;">$1</s>');
+    out = out.replace(/&lt;u&gt;(.+?)&lt;\/u&gt;/g, '<u style="text-decoration: underline;">$1</u>');
+    out = out.replace(/`([^`\n]+?)`/g, '<code style="background: rgba(255,255,255,0.1); padding: 1px 4px; border-radius: 3px; font-family: monospace;">$1</code>');
+    return out;
+  };
+
+  const lines = caption.split('\n');
+  const parts: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i];
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      parts.push('<div style="height: 8px;"></div>');
+      continue;
+    }
+    if (trimmed.startsWith('# ')) {
+      parts.push(`<h1 style="font-size: 15px; font-weight: 800; color: #60a5fa; margin: 4px 0 2px 0; line-height: 1.3;">${formatInline(trimmed.replace(/^#\s*/, ''))}</h1>`);
+      continue;
+    }
+    if (trimmed.startsWith('## ') || trimmed.startsWith('### ')) {
+      parts.push(`<h2 style="font-size: 13px; font-weight: 700; color: #93c5fd; margin: 3px 0 2px 0; line-height: 1.3;">${formatInline(trimmed.replace(/^#{2,3}\s*/, ''))}</h2>`);
+      continue;
+    }
+    if (trimmed.startsWith('> ') || trimmed.startsWith('❝')) {
+      const clean = trimmed.replace(/^>\s*/, '').replace(/^[❝❞]\s*/, '');
+      parts.push(`<blockquote style="border-left: 3px solid #3b82f6; background: rgba(59, 130, 246, 0.12); padding: 4px 8px; margin: 4px 0; border-radius: 0 4px 4px 0; font-size: 11px; color: #e2e8f0;">${formatInline(clean)}</blockquote>`);
+      continue;
+    }
+    if (/^[•✓✔➤➔★⭐◆❖]/.test(trimmed) || /^[\-*–—]\s+/.test(trimmed)) {
+      const marker = trimmed.match(/^([•✓✔➤➔★⭐◆❖\-*–—]+)\s*(.*)$/);
+      const icon = marker ? marker[1] : '•';
+      const text = marker ? marker[2] : trimmed;
+      parts.push(`<div style="display: flex; align-items: flex-start; gap: 6px; padding-left: 4px; font-size: 11.5px; line-height: 1.4; color: #f1f5f9;"><span style="color: #60a5fa; font-weight: bold; flex-shrink: 0;">${escapeHtml(icon)}</span><span>${formatInline(text)}</span></div>`);
+      continue;
+    }
+    if (/^(\d+)[\.\)]\s+/.test(trimmed)) {
+      const marker = trimmed.match(/^(\d+)[\.\)]\s+(.*)$/);
+      const num = marker ? marker[1] : '1';
+      const text = marker ? marker[2] : trimmed;
+      parts.push(`<div style="display: flex; align-items: flex-start; gap: 6px; padding-left: 4px; font-size: 11.5px; line-height: 1.4; color: #f1f5f9;"><span style="color: #93c5fd; font-weight: bold; flex-shrink: 0;">${escapeHtml(num)}.</span><span>${formatInline(text)}</span></div>`);
+      continue;
+    }
+    parts.push(`<div style="font-size: 11.5px; line-height: 1.45; color: #e2e8f0;">${formatInline(rawLine)}</div>`);
+  }
+  return parts.join('');
 }
 
 /**
@@ -394,6 +528,17 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
   const query = extractSearchQuery(window.location.href);
   const scannedCards = scanPageForGroupCards();
   const detectedGroupCount = scannedCards.length || state.totalFound;
+
+  const photoCount = draftPhotos.filter(p => !isVideoMedia(p)).length;
+  const videoCount = draftPhotos.filter(p => isVideoMedia(p)).length;
+  let mediaSummaryLabel = '0 Media';
+  if (photoCount > 0 && videoCount > 0) {
+    mediaSummaryLabel = `${photoCount} Photos + ${videoCount} Video${videoCount > 1 ? 's' : ''}`;
+  } else if (videoCount > 0) {
+    mediaSummaryLabel = `${videoCount} Video${videoCount > 1 ? 's' : ''}`;
+  } else if (photoCount > 0) {
+    mediaSummaryLabel = `${photoCount} Photo${photoCount > 1 ? 's' : ''}`;
+  }
 
   const isAutoJoinRunning = state.status === 'SEARCHING' || state.status === 'JOINING';
   const isCampaignRunning = campaignState.isRunning && !campaignState.isPaused;
@@ -670,6 +815,95 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         color: #a5b4fc;
         text-decoration: underline;
       }
+
+      /* Design Toolbar */
+      .design-toolbar {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-bottom: none;
+        border-radius: 10px 10px 0 0;
+        padding: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+      .toolbar-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px;
+      }
+      .tb-btn {
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 5px;
+        color: #f1f5f9;
+        font-size: 11px;
+        font-weight: 700;
+        padding: 2.5px 7px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s;
+        user-select: none;
+      }
+      .tb-btn:hover {
+        background: rgba(59, 130, 246, 0.3);
+        border-color: #3b82f6;
+        color: #ffffff;
+      }
+      .tb-btn:active {
+        transform: scale(0.96);
+      }
+      .tb-btn.active {
+        background: #2563eb;
+        border-color: #3b82f6;
+        color: white;
+      }
+      .tb-btn-auto {
+        background: rgba(245, 158, 11, 0.18);
+        border-color: rgba(245, 158, 11, 0.4);
+        color: #fbbf24;
+      }
+      .tb-btn-auto:hover {
+        background: rgba(245, 158, 11, 0.35);
+        border-color: #f59e0b;
+        color: #ffffff;
+      }
+      .tb-select {
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 5px;
+        color: #cbd5e1;
+        font-size: 10.5px;
+        font-weight: 600;
+        padding: 2.5px 5px;
+        outline: none;
+        cursor: pointer;
+      }
+      .tb-select:focus {
+        border-color: #3b82f6;
+      }
+      .tb-select-sales {
+        color: #34d399;
+      }
+      .fb-preview-card {
+        background: #18191a;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin-top: 8px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+      }
+      @keyframes fadeInOut {
+        0% { opacity: 0; transform: translate(-50%, -6px); }
+        15% { opacity: 1; transform: translate(-50%, 0); }
+        80% { opacity: 1; transform: translate(-50%, 0); }
+        100% { opacity: 0; transform: translate(-50%, -6px); }
+      }
+
       .caption-input {
         width: 100%;
         min-height: 72px;
@@ -677,7 +911,8 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         resize: vertical;
         background: rgba(0, 0, 0, 0.4);
         border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 10px;
+        border-radius: 0 0 10px 10px;
+        border-top: none;
         padding: 8px 10px;
         font-size: 12px;
         line-height: 1.45;
@@ -700,22 +935,38 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         margin-top: 3px;
       }
 
-      /* Photos Preview Area */
+      /* Photos & Videos Preview Area */
       .photos-container {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
         align-items: center;
         margin-top: 6px;
+        padding: 6px;
+        border-radius: 10px;
+        background: rgba(15, 23, 42, 0.4);
+        border: 1px dashed rgba(255, 255, 255, 0.12);
+        transition: border-color 0.2s, background-color 0.2s;
+      }
+      .photos-container.drag-over {
+        border-color: #3b82f6;
+        background: rgba(59, 130, 246, 0.15);
       }
       .photo-thumb-wrapper {
         position: relative;
-        width: 58px;
-        height: 58px;
+        width: 62px;
+        height: 62px;
         border-radius: 9px;
-        overflow: visible;
+        overflow: hidden;
         border: 1px solid rgba(255, 255, 255, 0.2);
-        background: #1e293b;
+        background: #0f172a;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .photo-thumb-wrapper.is-video {
+        border-color: rgba(16, 185, 129, 0.5);
+        box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
       }
       .photo-thumb-img {
         width: 100%;
@@ -724,14 +975,53 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         border-radius: 8px;
         display: block;
       }
+      .photo-thumb-video {
+        background: #020617;
+        pointer-events: none;
+      }
+      .media-video-overlay {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding-bottom: 3px;
+        background: linear-gradient(to top, rgba(0,0,0,0.75) 0%, transparent 60%);
+        pointer-events: none;
+      }
+      .media-video-badge {
+        background: rgba(16, 185, 129, 0.95);
+        color: #ffffff;
+        font-size: 8px;
+        font-weight: 800;
+        padding: 1px 4px;
+        border-radius: 3px;
+        letter-spacing: 0.3px;
+        display: inline-flex;
+        align-items: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.6);
+      }
+      .media-index-pill {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        background: rgba(0, 0, 0, 0.75);
+        color: #f8fafc;
+        font-size: 8px;
+        font-weight: 700;
+        padding: 1px 4px;
+        border-radius: 3px;
+        pointer-events: none;
+        z-index: 2;
+      }
       .photo-remove-btn {
         position: absolute;
-        top: -6px;
-        right: -6px;
-        width: 18px;
-        height: 18px;
+        top: 2px;
+        right: 2px;
+        width: 17px;
+        height: 17px;
         background: #ef4444;
-        border: 1.5px solid #0f172a;
+        border: 1px solid #0f172a;
         color: white;
         border-radius: 50%;
         display: flex;
@@ -741,34 +1031,59 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         font-weight: 900;
         cursor: pointer;
         box-shadow: 0 2px 5px rgba(0,0,0,0.4);
-        transition: transform 0.15s;
+        transition: transform 0.15s, background-color 0.15s;
+        z-index: 5;
       }
       .photo-remove-btn:hover {
-        transform: scale(1.15);
+        transform: scale(1.18);
         background: #dc2626;
       }
       .btn-add-photos {
-        height: 58px;
-        min-width: 90px;
-        padding: 8px 12px;
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px dashed rgba(255, 255, 255, 0.25);
+        min-height: 62px;
+        padding: 6px 12px;
+        background: rgba(30, 41, 59, 0.75);
+        border: 1px dashed rgba(255, 255, 255, 0.3);
         border-radius: 9px;
         color: #94a3b8;
         font-size: 11px;
-        font-weight: 700;
         cursor: pointer;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 3px;
+        gap: 2px;
         transition: all 0.2s;
       }
       .btn-add-photos:hover {
-        background: rgba(59, 130, 246, 0.15);
+        background: rgba(59, 130, 246, 0.2);
         border-color: #3b82f6;
         color: #60a5fa;
+      }
+      .media-uploading-card {
+        width: 62px;
+        height: 62px;
+        border-radius: 9px;
+        border: 1px dashed #3b82f6;
+        background: rgba(59, 130, 246, 0.15);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        color: #60a5fa;
+        font-size: 9px;
+        font-weight: 700;
+      }
+      .media-spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(96, 165, 250, 0.3);
+        border-top-color: #60a5fa;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
       }
 
       /* Options Grid */
@@ -1013,27 +1328,130 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         <div class="form-section">
           <div class="label-row">
             <label class="form-label">
-              <span>📝 Product Caption (ক্যাপশন)</span>
+              <span>📝 Post Caption / Description *</span>
             </label>
-            ${
-              draftCaption
-                ? `<button id="btn-clear-caption" class="action-link">Clear</button>`
-                : ''
-            }
+            <div style="display: flex; align-items: center; gap: 8px;">
+              ${
+                draftCaption
+                  ? `<button id="btn-clear-caption" class="action-link">Clear</button>`
+                  : ''
+              }
+              <span class="char-count" style="margin-top: 0;">${draftCaption.length} chars</span>
+            </div>
           </div>
+
+          <!-- Design Toolbar -->
+          <div class="design-toolbar">
+            <!-- Row 1: Facebook Text Formatting Tools -->
+            <div class="toolbar-row">
+              <button type="button" id="tb-h1" class="tb-btn" title="Heading 1 (বড় শিরোনাম - H1)">H1</button>
+              <button type="button" id="tb-h2" class="tb-btn" title="Heading 2 (মাঝারি শিরোনাম - H2)">H2</button>
+              <button type="button" id="tb-bold" class="tb-btn" title="Bold font (**text** - Works for Bengali, English, Emojis)"><strong>𝐁</strong> Bold</button>
+              <button type="button" id="tb-italic" class="tb-btn" title="Italic font (*text*)"><em style="font-style: italic; font-family: serif;">𝘐</em> Italic</button>
+              <button type="button" id="tb-strike" class="tb-btn" title="Strikethrough / কাটা দাগ (মূল্য ছাড়ে: ̶২̶,̶৫̶০̶০̶ ৳)" style="text-decoration: line-through;">S</button>
+              <button type="button" id="tb-bullets" class="tb-btn" title="Bullet list (বুলেট পয়েন্ট)"><span style="color: #60a5fa; margin-right: 2px;">•</span> Bullets</button>
+              <button type="button" id="tb-numbers" class="tb-btn" title="Numbered list (১. ২. ৩. নাম্বারিং)">1. List</button>
+              <button type="button" id="tb-quote" class="tb-btn" title="Blockquote (কোটেশন)">❞ Quote</button>
+              <select id="tb-select-style" class="tb-select" title="More Unicode Font Styles">
+                <option value="" disabled selected>🔤 Style</option>
+                <option value="sans-bold">𝘀𝗮𝗹𝗲 (Sans Bold)</option>
+                <option value="sans-italic">𝘴𝘢𝘭𝘦 (Sans Italic)</option>
+                <option value="sans-bold-italic">𝙨𝙖𝙡𝙚 (Bold Italic)</option>
+                <option value="serif-bold">𝐬𝐚ｌｅ (Serif Bold)</option>
+                <option value="serif-italic">𝑠𝑎ｌｅ (Serif Italic)</option>
+                <option value="script">𝓈𝒶𝓁ℯ (Cursive Script)</option>
+                <option value="bold-script">𝓼𝓪𝓵𝓮 (Bold Script)</option>
+                <option value="fraktur">𝔰𝔞𝔩𝔢 (Gothic Fraktur)</option>
+                <option value="bold-fraktur">𝖌𝖔𝖙𝖍𝖎𝖌 (Bold Gothic)</option>
+                <option value="double-struck">𝕕𝕠𝕦𝕓𝕝𝕖 (Double Struck)</option>
+                <option value="bubble">ⓑⓤⓑⓑⓛⓔ (Bubble)</option>
+                <option value="bubble-black">🅑🅤🅑🅑🅛🅔 (Black Bubble)</option>
+                <option value="square">🅂🅀🅄🄰🅁🄴 (Square)</option>
+                <option value="square-black">🅰🅱🅲 (Black Square)</option>
+                <option value="small-caps">ѕᴍᴀʟʟ ᴄᴀᴘs (Small Caps)</option>
+                <option value="monospace">𝚜𝚊ｌ𝚎 (Monospace)</option>
+                <option value="normal">sale (Clear Style)</option>
+              </select>
+            </div>
+
+            <!-- Row 2: Sales Tags, Dividers, Auto-Design & Live Preview -->
+            <div class="toolbar-row" style="justify-content: space-between; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 4px;">
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px;">
+                <button type="button" id="tb-auto-design" class="tb-btn tb-btn-auto" title="১-ক্লিকে অটো-ডিজাইন (Italic Title, Spec Bullets & Condition Notes)">
+                  <span>✨ Auto-Design</span>
+                </button>
+                <select id="tb-select-sales" class="tb-select tb-select-sales" title="Insert Sales Elements (Price, Delivery, WhatsApp, Warranty)">
+                  <option value="" disabled selected>🏷️ 1-Click Sales Tags</option>
+                  ${SALES_SNIPPETS.map(s => `<option value="${s.id}">${s.icon} ${s.name}</option>`).join('')}
+                </select>
+                <select id="tb-select-borders" class="tb-select" title="Insert Decorative Borders">
+                  <option value="" disabled selected>➖ Borders</option>
+                  ${DECORATIVE_DIVIDERS.map(d => `<option value="${d.value}">${d.name}</option>`).join('')}
+                </select>
+              </div>
+              <button type="button" id="tb-btn-preview" class="tb-btn ${showLivePreview ? 'active' : ''}" title="Toggle Live Facebook Post Preview">
+                <span>${showLivePreview ? '👁️ Hide' : '👁️ FB Preview'}</span>
+              </button>
+            </div>
+          </div>
+
           <textarea
             id="agp-caption-input"
             class="caption-input"
-            placeholder="এখানে আপনার পণ্যের বিবরণ, দাম ও মোবাইল নাম্বার লিখুন... (Type or paste your product caption here)"
+            placeholder="What are you posting? Write your full listing caption, details, price, phone number...&#10;&#10;Use H1, H2, Bold, Italic, Bullets, Sales Tags above to design your caption!"
           >${draftCaption}</textarea>
-          <div class="char-count">${draftCaption.length} chars</div>
+
+          <!-- Live Facebook Post Preview Card -->
+          ${
+            showLivePreview
+              ? `
+            <div class="fb-preview-card" id="agp-preview-card">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.1);">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6, #1d4ed8); display: flex; align-items: center; justify-content: center; font-size: 15px;">👤</div>
+                  <div>
+                    <div style="font-size: 12px; font-weight: 700; color: #ffffff;">Your Facebook Profile</div>
+                    <div style="font-size: 10px; color: #94a3b8; display: flex; align-items: center; gap: 4px;">
+                      <span>Just now</span>
+                      <span>·</span>
+                      <span>👥 Public Group</span>
+                    </div>
+                  </div>
+                </div>
+                <span style="font-size: 9px; font-weight: 700; background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); padding: 2px 6px; border-radius: 12px;">FB PREVIEW</span>
+              </div>
+              <div id="agp-preview-body" style="word-break: break-word;">
+                ${renderPreviewCaptionHtml(draftCaption)}
+              </div>
+              ${
+                draftPhotos.length > 0
+                  ? `
+                <div style="margin-top: 8px; border-radius: 8px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); background: #000; max-height: 120px; display: flex; align-items: center; justify-content: center;">
+                  ${
+                    isVideoMedia(draftPhotos[0])
+                      ? `<video src="${draftPhotos[0]}#t=0.1" style="max-height: 120px; width: 100%; object-fit: cover;" muted></video>`
+                      : `<img src="${draftPhotos[0]}" style="max-height: 120px; width: 100%; object-fit: cover;" alt="Preview" />`
+                  }
+                </div>
+                `
+                  : ''
+              }
+              <div style="display: flex; align-items: center; justify-content: space-around; margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08); font-size: 11px; color: #94a3b8; font-weight: 600;">
+                <span>👍 Like</span>
+                <span>💬 Comment</span>
+                <span>↗ Share</span>
+              </div>
+            </div>
+            `
+              : ''
+          }
         </div>
 
-        <!-- Photos Section -->
+        <!-- Photos & Videos Section -->
         <div class="form-section">
           <div class="label-row">
             <label class="form-label">
-              <span>📸 Product Photos (${draftPhotos.length} Added)</span>
+              <span>📸🎥 Product Photos & Videos (${mediaSummaryLabel} Added)</span>
             </label>
             ${
               draftPhotos.length > 0
@@ -1044,24 +1462,56 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
           <input
             type="file"
             id="agp-file-input"
-            accept="image/*,video/*"
+            accept="image/*,video/*,.mp4,.mov,.webm,.m4v,.mkv"
             multiple
             style="display: none;"
           />
-          <div class="photos-container">
+          <div class="photos-container" id="agp-media-container">
             ${draftPhotos
               .map(
-                (photo, idx) => `
-                <div class="photo-thumb-wrapper">
-                  <img src="${photo}" class="photo-thumb-img" alt="Photo ${idx + 1}" />
-                  <button class="photo-remove-btn" data-index="${idx}" title="Remove photo">✕</button>
-                </div>
-              `
+                (photo, idx) => {
+                  const isVideo = isVideoMedia(photo);
+                  return `
+                  <div class="photo-thumb-wrapper ${isVideo ? 'is-video' : ''}" title="${isVideo ? 'Video' : 'Photo'} #${idx + 1}">
+                    ${
+                      isVideo
+                        ? `
+                        <video src="${photo}#t=0.1" class="photo-thumb-img photo-thumb-video" muted playsinline preload="metadata" onloadedmetadata="this.currentTime=0.1"></video>
+                        <div class="media-video-overlay">
+                          <span class="media-video-badge">▶ VIDEO</span>
+                        </div>
+                        `
+                        : `
+                        <img src="${photo}" class="photo-thumb-img" alt="Photo ${idx + 1}" />
+                        `
+                    }
+                    <span class="media-index-pill">#${idx + 1}</span>
+                    <button class="photo-remove-btn" data-index="${idx}" title="Remove">✕</button>
+                  </div>
+                `;
+                }
               )
               .join('')}
-            <button id="btn-trigger-upload" class="btn-add-photos" title="Add photos from your computer">
-              <span style="font-size: 16px;">📷</span>
-              <span>+ Add Photos</span>
+
+            ${
+              isUploadingMedia
+                ? `
+                <div class="media-uploading-card">
+                  <div class="media-spinner"></div>
+                  <span>Uploading...</span>
+                </div>
+                `
+                : ''
+            }
+
+            <button id="btn-trigger-upload" class="btn-add-photos" title="Add photos and videos together (ছবি ও ভিডিও একসাথে যোগ করুন)">
+              <div style="font-size: 16px; display: flex; align-items: center; justify-content: center; gap: 4px;">
+                <span>📷</span>
+                <span style="font-size: 11px; opacity: 0.7;">+</span>
+                <span>🎥</span>
+              </div>
+              <span style="font-weight: 700; color: #f1f5f9;">+ Add Photos/Video</span>
+              <span style="font-size: 9px; color: #94a3b8; font-weight: normal;">(ছবি ও ভিডিও একসাথে)</span>
             </button>
           </div>
         </div>
@@ -1244,7 +1694,7 @@ function attachDockEventListeners(state: AutoJoinState, initialConfig?: AutoJoin
     updateDockContent(state, initialConfig);
   });
 
-  // Caption Input
+  // Caption Input & Design Toolbar Listeners
   const captionEl = shadowRoot.getElementById('agp-caption-input') as HTMLTextAreaElement | null;
   if (captionEl) {
     captionEl.addEventListener('input', () => {
@@ -1252,8 +1702,230 @@ function attachDockEventListeners(state: AutoJoinState, initialConfig?: AutoJoin
       saveDraftToStorage();
       const countEl = shadowRoot?.querySelector('.char-count');
       if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+      const previewBody = shadowRoot?.getElementById('agp-preview-body');
+      if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+    });
+
+    captionEl.addEventListener('paste', (e: ClipboardEvent) => {
+      const html = e.clipboardData?.getData('text/html');
+      if (html && (/<(h[1-6]|b|strong|i|em|s|u|ul|ol|li|blockquote)[\s>]/i.test(html) || /data-lexical/i.test(html))) {
+        e.preventDefault();
+        const styled = htmlToStyledText(html);
+        const start = captionEl.selectionStart;
+        const end = captionEl.selectionEnd;
+        const before = captionEl.value.substring(0, start);
+        const after = captionEl.value.substring(end);
+        draftCaption = before + styled + after;
+        captionEl.value = draftCaption;
+        saveDraftToStorage();
+        captionEl.focus();
+        captionEl.setSelectionRange(start + styled.length, start + styled.length);
+        showDockToast('📋 Styled text pasted with full design!');
+        const countEl = shadowRoot?.querySelector('.char-count');
+        if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+        const previewBody = shadowRoot?.getElementById('agp-preview-body');
+        if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+      }
     });
   }
+
+  const applyTextTransform = (transformFn: (selected: string) => string, defaultEmptyText?: string) => {
+    if (!captionEl) return;
+    const start = captionEl.selectionStart;
+    const end = captionEl.selectionEnd;
+    if (start !== end) {
+      const selected = captionEl.value.substring(start, end);
+      const replaced = transformFn(selected);
+      draftCaption = captionEl.value.substring(0, start) + replaced + captionEl.value.substring(end);
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      captionEl.focus();
+      captionEl.setSelectionRange(start, start + replaced.length);
+    } else if (defaultEmptyText !== undefined) {
+      draftCaption = captionEl.value.substring(0, start) + defaultEmptyText + captionEl.value.substring(end);
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      captionEl.focus();
+      const mid = start + Math.floor(defaultEmptyText.length / 2);
+      captionEl.setSelectionRange(mid, mid);
+    } else if (draftCaption.trim()) {
+      draftCaption = transformFn(draftCaption);
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      captionEl.focus();
+    }
+    const countEl = shadowRoot?.querySelector('.char-count');
+    if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+    const previewBody = shadowRoot?.getElementById('agp-preview-body');
+    if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+  };
+
+  shadowRoot.getElementById('tb-h1')?.addEventListener('click', () => {
+    if (!captionEl) return;
+    const start = captionEl.selectionStart;
+    const end = captionEl.selectionEnd;
+    if (start !== end) {
+      applyTextTransform(txt => applyHeading(txt, 1));
+    } else {
+      const before = captionEl.value.substring(0, start);
+      const after = captionEl.value.substring(end);
+      const lastNl = before.lastIndexOf('\n');
+      const nextNl = after.indexOf('\n');
+      const lineStart = lastNl === -1 ? 0 : lastNl + 1;
+      const lineEnd = nextNl === -1 ? captionEl.value.length : start + nextNl;
+      const currentLine = captionEl.value.substring(lineStart, lineEnd);
+      const headingLine = applyHeading(currentLine, 1);
+      draftCaption = captionEl.value.substring(0, lineStart) + headingLine + captionEl.value.substring(lineEnd);
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      captionEl.focus();
+    }
+    showDockToast('🏷️ Heading 1 (H1)');
+    const countEl = shadowRoot?.querySelector('.char-count');
+    if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+    const previewBody = shadowRoot?.getElementById('agp-preview-body');
+    if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+  });
+
+  shadowRoot.getElementById('tb-h2')?.addEventListener('click', () => {
+    if (!captionEl) return;
+    const start = captionEl.selectionStart;
+    const end = captionEl.selectionEnd;
+    if (start !== end) {
+      applyTextTransform(txt => applyHeading(txt, 2));
+    } else {
+      const before = captionEl.value.substring(0, start);
+      const after = captionEl.value.substring(end);
+      const lastNl = before.lastIndexOf('\n');
+      const nextNl = after.indexOf('\n');
+      const lineStart = lastNl === -1 ? 0 : lastNl + 1;
+      const lineEnd = nextNl === -1 ? captionEl.value.length : start + nextNl;
+      const currentLine = captionEl.value.substring(lineStart, lineEnd);
+      const headingLine = applyHeading(currentLine, 2);
+      draftCaption = captionEl.value.substring(0, lineStart) + headingLine + captionEl.value.substring(lineEnd);
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      captionEl.focus();
+    }
+    showDockToast('🏷️ Heading 2 (H2)');
+    const countEl = shadowRoot?.querySelector('.char-count');
+    if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+    const previewBody = shadowRoot?.getElementById('agp-preview-body');
+    if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+  });
+
+  shadowRoot.getElementById('tb-bold')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyBold(txt), '****');
+    showDockToast('𝐁 Bold (**text**)');
+  });
+
+  shadowRoot.getElementById('tb-italic')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyItalic(txt), '**');
+    showDockToast('𝘐 Italic (*text*)');
+  });
+
+  shadowRoot.getElementById('tb-strike')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyTextStyle(txt, 'strikethrough'));
+    showDockToast('Strikethrough / কাটা দাগ');
+  });
+
+  shadowRoot.getElementById('tb-bullets')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyBulletList(txt), '\n  • ');
+    showDockToast('• Bullets');
+  });
+
+  shadowRoot.getElementById('tb-numbers')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyNumberedList(txt), '\n  1. ');
+    showDockToast('1. Numbered List');
+  });
+
+  shadowRoot.getElementById('tb-quote')?.addEventListener('click', () => {
+    applyTextTransform(txt => applyBlockquote(txt), '\n> ');
+    showDockToast('❞ Quote');
+  });
+
+  const styleSelect = shadowRoot.getElementById('tb-select-style') as HTMLSelectElement | null;
+  styleSelect?.addEventListener('change', () => {
+    if (styleSelect.value) {
+      applyTextTransform(txt => applyTextStyle(txt, styleSelect.value as FontStyleType));
+      showDockToast(`Applied ${styleSelect.value}!`);
+      styleSelect.value = '';
+    }
+  });
+
+  shadowRoot.getElementById('tb-auto-design')?.addEventListener('click', () => {
+    if (!draftCaption.trim()) {
+      showDockToast('⚠️ আগে ক্যাপশন লিখুন (Type caption first)');
+      return;
+    }
+    draftCaption = autoBeautifyCaption(draftCaption);
+    if (captionEl) captionEl.value = draftCaption;
+    saveDraftToStorage();
+    showDockToast('✨ 1-Click Auto-Design Applied!');
+    const countEl = shadowRoot?.querySelector('.char-count');
+    if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+    const previewBody = shadowRoot?.getElementById('agp-preview-body');
+    if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+  });
+
+  const salesSelect = shadowRoot.getElementById('tb-select-sales') as HTMLSelectElement | null;
+  salesSelect?.addEventListener('change', () => {
+    if (salesSelect.value && captionEl) {
+      const snip = SALES_SNIPPETS.find(s => s.id === salesSelect.value);
+      if (snip) {
+        const contentToInsert = snip.content
+          .replace('{price}', '১,৫০০ ৳')
+          .replace('{location}', 'ঢাকা / সারা বাংলাদেশ')
+          .replace('{contact_info}', 'ইনবক্স করুন / 017xxxxxxxx');
+        const start = captionEl.selectionStart;
+        const end = captionEl.selectionEnd;
+        const before = captionEl.value.substring(0, start);
+        const after = captionEl.value.substring(end);
+        const sepBefore = before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+        const next = before + sepBefore + contentToInsert + '\n' + after;
+        draftCaption = next;
+        captionEl.value = draftCaption;
+        saveDraftToStorage();
+        showDockToast(`Inserted ${snip.name}!`);
+        captionEl.focus();
+        captionEl.setSelectionRange(start + sepBefore.length + contentToInsert.length + 1, start + sepBefore.length + contentToInsert.length + 1);
+        const countEl = shadowRoot?.querySelector('.char-count');
+        if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+        const previewBody = shadowRoot?.getElementById('agp-preview-body');
+        if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+      }
+      salesSelect.value = '';
+    }
+  });
+
+  const borderSelect = shadowRoot.getElementById('tb-select-borders') as HTMLSelectElement | null;
+  borderSelect?.addEventListener('change', () => {
+    if (borderSelect.value && captionEl) {
+      const dividerText = borderSelect.value;
+      const start = captionEl.selectionStart;
+      const end = captionEl.selectionEnd;
+      const before = captionEl.value.substring(0, start);
+      const after = captionEl.value.substring(end);
+      const sepBefore = before.length === 0 || before.endsWith('\n') ? '' : '\n';
+      const sepAfter = after.startsWith('\n') ? '' : '\n';
+      draftCaption = before + sepBefore + dividerText + sepAfter + after;
+      captionEl.value = draftCaption;
+      saveDraftToStorage();
+      showDockToast('➖ Border inserted!');
+      captionEl.focus();
+      captionEl.setSelectionRange(start + sepBefore.length + dividerText.length + sepAfter.length, start + sepBefore.length + dividerText.length + sepAfter.length);
+      const countEl = shadowRoot?.querySelector('.char-count');
+      if (countEl) countEl.textContent = `${draftCaption.length} chars`;
+      const previewBody = shadowRoot?.getElementById('agp-preview-body');
+      if (previewBody) previewBody.innerHTML = renderPreviewCaptionHtml(draftCaption);
+      borderSelect.value = '';
+    }
+  });
+
+  shadowRoot.getElementById('tb-btn-preview')?.addEventListener('click', () => {
+    showLivePreview = !showLivePreview;
+    updateDockContent(state, initialConfig);
+  });
 
   shadowRoot.getElementById('btn-clear-caption')?.addEventListener('click', () => {
     draftCaption = '';
@@ -1261,7 +1933,7 @@ function attachDockEventListeners(state: AutoJoinState, initialConfig?: AutoJoin
     updateDockContent(state, initialConfig);
   });
 
-  // Photo Upload Trigger & File Input
+  // Photo & Video Upload Trigger & File Input
   const fileInput = shadowRoot.getElementById('agp-file-input') as HTMLInputElement | null;
   shadowRoot.getElementById('btn-trigger-upload')?.addEventListener('click', () => {
     fileInput?.click();
@@ -1270,23 +1942,69 @@ function attachDockEventListeners(state: AutoJoinState, initialConfig?: AutoJoin
   if (fileInput) {
     fileInput.addEventListener('change', async () => {
       if (fileInput.files && fileInput.files.length > 0) {
+        isUploadingMedia = true;
+        updateDockContent(state, initialConfig);
+
+        const filesArr = Array.from(fileInput.files);
         const newUrls: string[] = [];
-        for (let i = 0; i < fileInput.files.length; i++) {
+        for (const file of filesArr) {
           try {
-            const dataUrl = await fileToDataUrl(fileInput.files[i]);
-            newUrls.push(dataUrl);
+            const dataUrl = await fileToDataUrl(file);
+            if (dataUrl) {
+              newUrls.push(dataUrl);
+            }
           } catch (err) {
             console.warn('[AGP:SearchPoster] File convert error:', err);
           }
         }
         draftPhotos = [...draftPhotos, ...newUrls];
         await saveDraftToStorage();
+        isUploadingMedia = false;
+        fileInput.value = '';
         updateDockContent(state, initialConfig);
       }
     });
   }
 
-  // Remove individual photo
+  // Drag-and-drop Photos & Videos directly onto container
+  const mediaContainer = shadowRoot.getElementById('agp-media-container');
+  if (mediaContainer) {
+    mediaContainer.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      mediaContainer.classList.add('drag-over');
+    });
+    mediaContainer.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      mediaContainer.classList.remove('drag-over');
+    });
+    mediaContainer.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      mediaContainer.classList.remove('drag-over');
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+        isUploadingMedia = true;
+        updateDockContent(state, initialConfig);
+
+        const filesArr = Array.from(e.dataTransfer.files);
+        const newUrls: string[] = [];
+        for (const file of filesArr) {
+          try {
+            const dataUrl = await fileToDataUrl(file);
+            if (dataUrl) {
+              newUrls.push(dataUrl);
+            }
+          } catch (err) {
+            console.warn('[AGP:SearchPoster] Drag drop convert error:', err);
+          }
+        }
+        draftPhotos = [...draftPhotos, ...newUrls];
+        await saveDraftToStorage();
+        isUploadingMedia = false;
+        updateDockContent(state, initialConfig);
+      }
+    });
+  }
+
+  // Remove individual photo/video
   shadowRoot.querySelectorAll('.photo-remove-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1410,7 +2128,7 @@ function attachDockEventListeners(state: AutoJoinState, initialConfig?: AutoJoin
 async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoinConfig) {
   // Validate input
   if (!draftCaption.trim() && draftPhotos.length === 0) {
-    campaignState.message = '⚠️ অনুগ্রহ করে পোস্টের ক্যাপশন অথবা অন্তত একটি ছবি যুক্ত করুন (Please add caption or photos).';
+    campaignState.message = '⚠️ অনুগ্রহ করে পোস্টের ক্যাপশন অথবা অন্তত একটি ছবি/ভিডিও যুক্ত করুন (Please add caption, photos or video).';
     updateDockContent(state, initialConfig);
     return;
   }
