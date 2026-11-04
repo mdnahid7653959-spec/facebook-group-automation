@@ -51,7 +51,7 @@ const STORAGE_KEY_COMMIT = 'fb_auto_current_commit_sha';
 const STORAGE_KEY_RELOADED_AT = 'fb_auto_last_reloaded_at';
 
 // Current repo commit as default fallback
-export const DEFAULT_FALLBACK_SHA = 'a224c66e2538348553a50e6b191ff23ab06f1be2';
+export const DEFAULT_FALLBACK_SHA = 'af61b904bf79d363b8d60c4aa301b4c6e94916a4';
 
 // Calculate relative time (e.g. "5m ago", "2h ago", "yesterday")
 export function formatRelativeTime(dateString: string): string {

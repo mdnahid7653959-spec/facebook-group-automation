@@ -1,8 +1,8 @@
 {
-  "version": "1.0.1",
-  "commitSha": "5e132be1dfd9beda8961bb0111b01ad51ed67a9e",
-  "shortSha": "5e132be",
-  "message": "fix: multi-account group persistence, eliminate auto-select bug, and optimize rendering to prevent lag",
-  "commitDate": "2026-11-01T16:20:57+06:00",
-  "builtAt": "2026-11-01T10:21:46.410Z"
+  "version": "1.0.2",
+  "commitSha": "af61b904bf79d363b8d60c4aa301b4c6e94916a4",
+  "shortSha": "af61b90",
+  "message": "feat: add photo/video dual upload, rich caption styling toolbar, and live FB preview",
+  "commitDate": "2026-11-04T22:38:00+06:00",
+  "builtAt": "2026-11-04T22:55:00.000Z"
 }

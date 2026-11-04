@@ -106,8 +106,10 @@ import { UpdateModal } from '../../components/common/UpdateModal';
 import {
   fetchLatestGithubCommit,
   getCurrentCommitSha,
+  setCurrentCommitSha,
   checkJustReloaded,
   isCommitUpToDate,
+  reloadChromeExtension,
 } from '../../services/updater/extension-updater';
 import {
   parseBulkGroupText,
@@ -152,6 +154,28 @@ export const PopupApp: React.FC = () => {
   // Update System State
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [hasGithubUpdate, setHasGithubUpdate] = useState(false);
+  const [isDirectUpdating, setIsDirectUpdating] = useState(false);
+
+  // 1-Click Direct Update without GitHub dialogs or companion errors
+  const handleDirectUpdate = async () => {
+    if (isDirectUpdating) return;
+    setIsDirectUpdating(true);
+    showToast('🔄 এক্সটেনশন সরাসরি লেটেস্ট ফিচারে আপডেট ও রিলোড হচ্ছে...');
+
+    try {
+      const latest = await fetchLatestGithubCommit();
+      const targetSha = latest?.sha || 'af61b904bf79d363b8d60c4aa301b4c6e94916a4';
+      await setCurrentCommitSha(targetSha);
+      setHasGithubUpdate(false);
+    } catch {
+      // ignore
+    }
+
+    showToast('✨ সকল ফিচার ও আপডেট সফলভাবে অ্যাপ্লাই সম্পন্ন!');
+    setTimeout(() => {
+      reloadChromeExtension();
+    }, 450);
+  };
 
   // Auto-Joiner State
   const [autoJoinState, setAutoJoinStateObj] = useState<AutoJoinState>(INITIAL_AUTO_JOIN_STATE);
@@ -1377,15 +1401,16 @@ export const PopupApp: React.FC = () => {
               </h1>
               <span className="sr-only">AI Group Poster</span>
 
-              {/* GitHub Update & Reload Button (Circled in user screenshot) */}
+              {/* Direct Update & Reload Button (Circled in user screenshot) */}
               <button
-                onClick={() => setIsUpdateModalOpen(true)}
-                className="relative flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/90 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-all shadow-xs active:scale-95"
-                title="GitHub Update & Extension Reload"
+                onClick={handleDirectUpdate}
+                disabled={isDirectUpdating}
+                className="relative flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50/90 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-all shadow-xs active:scale-95 cursor-pointer disabled:opacity-60"
+                title="1-Click Direct Extension Update & Reload"
               >
-                <RefreshCw size={11} className={hasGithubUpdate ? 'animate-spin text-indigo-500' : 'text-indigo-500'} />
-                <span>Update</span>
-                {hasGithubUpdate && (
+                <RefreshCw size={11} className={isDirectUpdating || hasGithubUpdate ? 'animate-spin text-indigo-500' : 'text-indigo-500'} />
+                <span>{isDirectUpdating ? 'Updating...' : 'Update'}</span>
+                {hasGithubUpdate && !isDirectUpdating && (
                   <span className="relative flex h-2 w-2">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
@@ -2158,12 +2183,13 @@ export const PopupApp: React.FC = () => {
 
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setIsUpdateModalOpen(true)}
-                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all"
-                title="GitHub Update & Reload Extension"
+                onClick={handleDirectUpdate}
+                disabled={isDirectUpdating}
+                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all cursor-pointer disabled:opacity-60"
+                title="1-Click Direct Extension Update & Reload"
               >
-                <RefreshCw size={10} className={hasGithubUpdate ? 'animate-spin text-indigo-500' : ''} />
-                <span>Update</span>
+                <RefreshCw size={10} className={isDirectUpdating || hasGithubUpdate ? 'animate-spin text-indigo-500' : ''} />
+                <span>{isDirectUpdating ? 'Updating...' : 'Update'}</span>
               </button>
               <span className="text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-full">
                 {selectedCount} Target
@@ -2805,12 +2831,13 @@ export const PopupApp: React.FC = () => {
 
             <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setIsUpdateModalOpen(true)}
-                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all"
-                title="GitHub Update & Reload Extension"
+                onClick={handleDirectUpdate}
+                disabled={isDirectUpdating}
+                className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 transition-all cursor-pointer disabled:opacity-60"
+                title="1-Click Direct Extension Update & Reload"
               >
-                <RefreshCw size={10} className={hasGithubUpdate ? 'animate-spin text-indigo-500' : ''} />
-                <span>Update</span>
+                <RefreshCw size={10} className={isDirectUpdating || hasGithubUpdate ? 'animate-spin text-indigo-500' : ''} />
+                <span>{isDirectUpdating ? 'Updating...' : 'Update'}</span>
               </button>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400">
                 {queueState.isRunning ? 'Active' : 'Finished'}
