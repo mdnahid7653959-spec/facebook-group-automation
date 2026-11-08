@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "29601b071f9b70ce704562207f405a917bfff45d",
-  "shortSha": "29601b0",
-  "message": "build: rebuild clean production extension dist bundle and mobile package",
-  "commitDate": "2026-11-04T23:48:17+06:00",
-  "builtAt": "2026-11-08T17:42:16.265Z"
+  "commitSha": "0638afb2d03b77f9101acfa06b9d08b247ea883d",
+  "shortSha": "0638afb",
+  "message": "feat: add mobile support, responsive UI, Kiwi/Lemur setup modal, and mobile zip package",
+  "commitDate": "2026-11-08T23:44:18+06:00",
+  "builtAt": "2026-11-08T17:49:21.163Z"
 }

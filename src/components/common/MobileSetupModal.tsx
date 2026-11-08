@@ -131,13 +131,24 @@ export const MobileSetupModal: React.FC<MobileSetupModalProps> = ({
             </div>
 
             {/* Step 4 */}
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/70 space-y-1">
+              <div className="font-bold text-[11px] text-slate-900 dark:text-white flex items-center gap-1.5">
+                <span className="w-5 h-5 rounded-full bg-blue-600 text-white text-[10px] flex items-center justify-center font-bold">4</span>
+                <span>ফেসবুকে Desktop Site অন করে পোস্ট শুরু</span>
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 pl-6.5 leading-normal">
+                Kiwi Browser-এ <code className="bg-slate-200 dark:bg-slate-700 px-1 py-0.5 rounded font-mono font-bold">facebook.com</code> এ গিয়ে ৩টি ডট (<strong>⋮</strong>) থেকে <strong>"Desktop site"</strong> টিক দিন। এরপর ৩ ডট মেনুর একদম নিচে এক্সটেনশন আইকন থেকে সরাসরি ক্যাপশন, ফটো ও ভিডিও দিয়ে পোস্ট শুরু করুন!
+              </p>
+            </div>
+
+            {/* Step 5: Direct Mobile App Icon */}
             <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 space-y-1">
               <div className="font-bold text-[11px] text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
                 <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>ফেসবুকে Desktop Site অন করে পোস্ট শুরু</span>
+                <span>ফোনের স্ক্রিনে সরাসরি অ্যাপের মতো ব্যবহার (Add to Home Screen)</span>
               </div>
               <p className="text-[10px] text-emerald-800 dark:text-emerald-300/90 leading-normal">
-                Kiwi Browser-এ <code className="bg-emerald-100 dark:bg-emerald-900/60 px-1 py-0.5 rounded font-mono font-bold">facebook.com</code> এ গিয়ে মেনু থেকে <strong>"Desktop site"</strong> টিক দিন। এরপর ৩ ডট মেনুর একদম নিচে এক্সটেনশন আইকন থেকে সরাসরি পোস্ট শুরু করুন!
+                এক্সটেনশনের ড্যাশবোর্ড ওপেন করে Kiwi-এর ৩টি ডট (<strong>⋮</strong>) চেপে <strong>"Add to Home screen"</strong> বা <strong>"Install app"</strong> চাপুন। তাহলে আপনার ফোনের হোম স্ক্রিনে ফেসবুক পোস্টার অ্যাপের নিজস্ব আইকন চলে আসবে এবং ফুল-স্ক্রিন অ্যাপ আকারে ওপেন হবে!
               </p>
             </div>
           </div>

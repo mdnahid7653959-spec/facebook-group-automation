@@ -144,6 +144,13 @@ async function buildExtension() {
     console.log('✅ manifest.json copied to dist/');
   }
 
+  const webManifestSrc = path.resolve(rootDir, 'public/app.webmanifest');
+  const webManifestDest = path.resolve(distDir, 'app.webmanifest');
+  if (fs.existsSync(webManifestSrc)) {
+    fs.copyFileSync(webManifestSrc, webManifestDest);
+    console.log('✅ app.webmanifest copied to dist/');
+  }
+
   const iconsSrc = path.resolve(rootDir, 'public/icons');
   const iconsDest = path.resolve(distDir, 'icons');
   if (fs.existsSync(iconsSrc)) {
