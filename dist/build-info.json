@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "bba3d306f040407d85f3217bb1727b957298fe2f",
-  "shortSha": "bba3d30",
-  "message": "fix: simplify extension updater with 1-click direct update, remove github jargon and companion bridge requirements",
-  "commitDate": "2026-11-04T23:01:24+06:00",
-  "builtAt": "2026-11-04T17:45:03.172Z"
+  "commitSha": "29601b071f9b70ce704562207f405a917bfff45d",
+  "shortSha": "29601b0",
+  "message": "build: rebuild clean production extension dist bundle and mobile package",
+  "commitDate": "2026-11-04T23:48:17+06:00",
+  "builtAt": "2026-11-08T17:42:16.265Z"
 }

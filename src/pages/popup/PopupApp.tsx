@@ -58,6 +58,7 @@ import {
   ChevronUp,
   Send,
   StopCircle,
+  Smartphone,
   Trash2,
   Clock,
   Zap,
@@ -103,6 +104,7 @@ import {
   DividerItem,
 } from '../../utils/text-styler';
 import { UpdateModal } from '../../components/common/UpdateModal';
+import { MobileSetupModal } from '../../components/common/MobileSetupModal';
 import {
   fetchLatestGithubCommit,
   getCurrentCommitSha,
@@ -153,6 +155,7 @@ export const PopupApp: React.FC = () => {
 
   // Update System State
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [isMobileModalOpen, setIsMobileModalOpen] = useState(false);
   const [hasGithubUpdate, setHasGithubUpdate] = useState(false);
   const [isDirectUpdating, setIsDirectUpdating] = useState(false);
 
@@ -1379,7 +1382,7 @@ export const PopupApp: React.FC = () => {
     : null;
 
   return (
-    <div className="w-[390px] bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans select-none flex flex-col h-[580px] shadow-2xl relative overflow-hidden">
+    <div className="w-full sm:w-[390px] max-w-[100vw] h-screen sm:h-[580px] max-h-screen sm:max-h-[600px] bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans select-none flex flex-col shadow-2xl relative overflow-hidden">
       
       {/* Toast Alert */}
       {toastMessage && (
@@ -1445,6 +1448,16 @@ export const PopupApp: React.FC = () => {
               >
                 <FileCode2 size={13} />
                 <span>Copy JSON</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsMobileModalOpen(true)}
+                className="text-xs text-indigo-500 hover:text-indigo-400 flex items-center gap-1 font-semibold transition-colors"
+                title="Mobile Setup Guide (ফোনে ব্যবহারের নিয়ম)"
+              >
+                <Smartphone size={13} />
+                <span>Mobile</span>
               </button>
 
               <button
@@ -3064,6 +3077,13 @@ export const PopupApp: React.FC = () => {
       <UpdateModal
         isOpen={isUpdateModalOpen}
         onClose={() => setIsUpdateModalOpen(false)}
+        onShowToast={showToast}
+      />
+
+      {/* Mobile Setup Modal */}
+      <MobileSetupModal
+        isOpen={isMobileModalOpen}
+        onClose={() => setIsMobileModalOpen(false)}
         onShowToast={showToast}
       />
 

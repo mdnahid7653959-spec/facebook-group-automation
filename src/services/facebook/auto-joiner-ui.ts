@@ -299,10 +299,12 @@ export async function renderAutoJoinerDock(config?: AutoJoinConfig) {
   if (!autoJoinContainer) {
     autoJoinContainer = document.createElement('div');
     autoJoinContainer.id = 'agp-auto-joiner-root';
+    const isMobileViewport = window.innerWidth <= 640;
     autoJoinContainer.style.cssText = `
       position: fixed;
-      bottom: 24px;
-      right: 24px;
+      bottom: ${isMobileViewport ? '10px' : '24px'};
+      right: ${isMobileViewport ? '10px' : '24px'};
+      ${isMobileViewport ? 'left: 10px; max-width: calc(100vw - 20px);' : ''}
       z-index: 2147483646;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     `;
@@ -562,6 +564,12 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
 
   // Minimized Floating Pill View
   if (isDockMinimized) {
+    if (autoJoinContainer) {
+      autoJoinContainer.style.left = 'auto';
+      autoJoinContainer.style.width = 'auto';
+      autoJoinContainer.style.right = window.innerWidth <= 640 ? '12px' : '24px';
+      autoJoinContainer.style.bottom = window.innerWidth <= 640 ? '12px' : '24px';
+    }
     const summaryText = campaignState.isRunning
       ? `Posting: ${campaignState.completed}/${campaignState.total}`
       : isAutoJoinRunning
@@ -621,6 +629,14 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
   }
 
   // Full Expanded Dock Card View
+  if (autoJoinContainer) {
+    const isMobile = window.innerWidth <= 640;
+    autoJoinContainer.style.left = isMobile ? '8px' : 'auto';
+    autoJoinContainer.style.right = isMobile ? '8px' : '24px';
+    autoJoinContainer.style.bottom = isMobile ? '8px' : '24px';
+    autoJoinContainer.style.width = isMobile ? 'calc(100vw - 16px)' : 'auto';
+  }
+
   const percentCompleted =
     campaignState.total > 0
       ? Math.min(100, Math.round((campaignState.completed / campaignState.total) * 100))
@@ -645,6 +661,27 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
         padding: 16px;
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      @media (max-width: 640px) {
+        .dock-card {
+          width: 100% !important;
+          max-width: 100% !important;
+          max-height: 85vh !important;
+          border-radius: 16px !important;
+          padding: 12px !important;
+        }
+        .header {
+          padding-bottom: 8px !important;
+          margin-bottom: 8px !important;
+        }
+        .tb-btn {
+          padding: 4px 6px !important;
+          font-size: 11px !important;
+        }
+        .tb-select {
+          max-width: 110px !important;
+          font-size: 11px !important;
+        }
       }
       .dock-card::-webkit-scrollbar {
         width: 6px;

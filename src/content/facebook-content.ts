@@ -3218,6 +3218,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 // Run initial inspection immediately
+checkMobileFacebookEnvironment();
 inspectPageAndConnect();
 setTimeout(triggerAutoScanIfJoinsPage, 100);
 
@@ -3226,8 +3227,61 @@ let lastTrackedUrl = window.location.href;
 function handleUrlTransition() {
   if (window.location.href !== lastTrackedUrl) {
     lastTrackedUrl = window.location.href;
+    checkMobileFacebookEnvironment();
     inspectPageAndConnect();
     setTimeout(triggerAutoScanIfJoinsPage, 100);
+  }
+}
+
+/**
+ * Detects if the mobile user is on m.facebook.com and offers 1-click switch to Desktop site
+ */
+function checkMobileFacebookEnvironment() {
+  const host = window.location.hostname.toLowerCase();
+  if (host.startsWith('m.') || host.includes('mbasic.')) {
+    if (document.getElementById('agp-mobile-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'agp-mobile-banner';
+    banner.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 2147483647;
+      background: linear-gradient(135deg, #1e1b4b, #312e81);
+      border-bottom: 2px solid #6366f1;
+      padding: 10px 14px;
+      color: #fff;
+      font-family: -apple-system, Roboto, sans-serif;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    `;
+    banner.innerHTML = `
+      <div style="font-size: 11.5px; line-height: 1.4;">
+        <strong>📱 AI Group Poster:</strong> মোবাইলে অটোমেশনের জন্য Kiwi Browser-এর ৩টি ডট (⋮) থেকে <strong>"Desktop site"</strong> অন করুন অথবা এখানে ট্যাপ করুন।
+      </div>
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <button id="agp-switch-desktop-btn" style="background: #3b82f6; border: none; border-radius: 6px; color: #fff; padding: 6px 10px; font-weight: bold; font-size: 11px; white-space: nowrap; cursor: pointer;">
+          🖥️ Desktop Mode
+        </button>
+        <button id="agp-close-banner-btn" style="background: transparent; border: none; color: #94a3b8; font-size: 16px; cursor: pointer; padding: 2px 6px;">✕</button>
+      </div>
+    `;
+    document.body.appendChild(banner);
+
+    const switchBtn = document.getElementById('agp-switch-desktop-btn');
+    if (switchBtn) {
+      switchBtn.onclick = () => {
+        window.location.href = window.location.href.replace('://m.', '://www.').replace('://mbasic.', '://www.');
+      };
+    }
+    const closeBtn = document.getElementById('agp-close-banner-btn');
+    if (closeBtn) {
+      closeBtn.onclick = () => banner.remove();
+    }
   }
 }
 
