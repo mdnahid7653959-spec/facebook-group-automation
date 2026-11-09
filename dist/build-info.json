@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "7a6b7f389cb5089c4b1661922296f11d9ce2ca10",
-  "shortSha": "7a6b7f3",
-  "message": "feat: add PWA web manifest, standalone homescreen app support, and update mobile build",
-  "commitDate": "2026-11-08T23:50:26+06:00",
-  "builtAt": "2026-11-09T14:07:41.877Z"
+  "commitSha": "ac2deffdc27a287d6cc131ba96579a7257298096",
+  "shortSha": "ac2deff",
+  "message": "fix: restore fixed popup dimensions to resolve collapsed black box popup window",
+  "commitDate": "2026-11-09T20:07:54+06:00",
+  "builtAt": "2026-11-09T14:28:01.017Z"
 }

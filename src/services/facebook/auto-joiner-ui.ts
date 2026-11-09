@@ -33,7 +33,7 @@ let isUploadingMedia = false;
 let showLivePreview = false;
 let activeTab: 'POST_AND_JOIN' | 'JOIN_ONLY' = 'POST_AND_JOIN';
 let targetGroupCount = 0; // 0 = all
-let pacingDelaySec = 5;
+let pacingDelaySec = 0; // Default to 0s TURBO for super fast posting!
 let isGroupsListExpanded = false;
 let isDockMinimized = false;
 let hasLoadedDraft = false;
@@ -185,6 +185,8 @@ async function loadDraftFromStorage() {
       }
       if (typeof res?.agp_search_poster_delay === 'number') {
         pacingDelaySec = res.agp_search_poster_delay;
+      } else {
+        pacingDelaySec = 0;
       }
       if (typeof res?.agp_search_poster_target === 'number') {
         targetGroupCount = res.agp_search_poster_target;
@@ -1565,13 +1567,13 @@ function updateDockContent(state: AutoJoinState, initialConfig?: AutoJoinConfig)
             </select>
           </div>
           <div>
-            <div class="form-label" style="margin-bottom: 4px;">Pacing Delay</div>
+            <div class="form-label" style="margin-bottom: 4px;">Pacing Delay (স্পিড)</div>
             <select id="agp-select-delay" class="select-box">
-              <option value="0" ${pacingDelaySec === 0 ? 'selected' : ''}>Turbo (0s Delay)</option>
-              <option value="5" ${pacingDelaySec === 5 ? 'selected' : ''}>5 Sec (Recommended)</option>
+              <option value="0" ${pacingDelaySec === 0 ? 'selected' : ''}>⚡ Turbo (0s Delay - Super Fast)</option>
+              <option value="1" ${pacingDelaySec === 1 ? 'selected' : ''}>⚡ 1 Sec (Ultra Fast)</option>
+              <option value="3" ${pacingDelaySec === 3 ? 'selected' : ''}>3 Sec (Fast)</option>
+              <option value="5" ${pacingDelaySec === 5 ? 'selected' : ''}>5 Sec (Normal)</option>
               <option value="10" ${pacingDelaySec === 10 ? 'selected' : ''}>10 Seconds</option>
-              <option value="20" ${pacingDelaySec === 20 ? 'selected' : ''}>20 Seconds</option>
-              <option value="30" ${pacingDelaySec === 30 ? 'selected' : ''}>30 Seconds</option>
             </select>
           </div>
         </div>
@@ -2170,21 +2172,18 @@ async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoin
     return;
   }
 
-  campaignState.status = 'SCANNING';
-  campaignState.message = '🔍 Scanning search results for Facebook groups...';
-  updateDockContent(state, initialConfig);
-
-  // Progressive scanning with auto-scroll up to the desired target count
-  const targetDesired = targetGroupCount > 0 ? targetGroupCount : 10;
+  // Fast scan
   let scanned = scanPageForGroupCards();
+  const targetDesired = targetGroupCount > 0 ? targetGroupCount : (scanned.length || 10);
   let scrollAttempts = 0;
 
-  while (scanned.length < targetDesired && scrollAttempts < 6) {
+  while (scanned.length < targetDesired && scrollAttempts < 3) {
     scrollAttempts++;
+    campaignState.status = 'SCANNING';
     campaignState.message = `🔍 Scanning search results... Found ${scanned.length}/${targetDesired} groups...`;
     updateDockContent(state, initialConfig);
     window.scrollBy({ top: 1000, behavior: 'smooth' });
-    await new Promise(r => setTimeout(r, 800));
+    await new Promise(r => setTimeout(r, 400));
     scanned = scanPageForGroupCards();
   }
 
@@ -2197,52 +2196,34 @@ async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoin
 
   const targetCards = targetGroupCount > 0 ? scanned.slice(0, targetGroupCount) : scanned;
 
-  campaignState.message = `Saving ${targetCards.length} groups to database...`;
-  updateDockContent(state, initialConfig);
-
-  // Save discovered groups to persistent storage
-  const existingGroups = await getGroups();
-  const existingMap = new Map(
-    existingGroups.map(g => [g.groupId ? g.groupId.toLowerCase() : g.id.toLowerCase(), g])
-  );
-
-  const groupsToSave: Group[] = [];
+  // 1. Build lean target groups in memory (super fast, no blocking storage overhead!)
+  const targetGroups: Group[] = [];
   const groupIds: string[] = [];
 
   for (const s of targetCards) {
     const slugOrId = s.item.groupId || s.item.id;
     const cleanUrl = s.item.url || `https://www.facebook.com/groups/${encodeURIComponent(slugOrId)}/`;
-    let grp = existingMap.get(slugOrId.toLowerCase());
-
-    if (!grp) {
-      grp = {
-        id: generateId('grp'),
-        groupId: slugOrId,
-        name: s.item.name || 'Facebook Group',
-        url: cleanUrl,
-        category: 'Search Result',
-        privacy: s.item.privacy,
-        enabled: true,
-        selected: true,
-        status: 'READY',
-        postCount: 0,
-        verified: true,
-        source: 'facebook-ui',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-      groupsToSave.push(grp);
-      existingMap.set(slugOrId.toLowerCase(), grp);
-    }
+    const grp: Group = {
+      id: slugOrId,
+      groupId: slugOrId,
+      name: s.item.name || 'Facebook Group',
+      url: cleanUrl,
+      category: 'Search Result',
+      privacy: s.item.privacy,
+      enabled: true,
+      selected: true,
+      status: 'READY',
+      postCount: 0,
+      verified: true,
+      source: 'facebook-ui',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    targetGroups.push(grp);
     groupIds.push(grp.id);
   }
 
-  const allMergedGroups = [...existingGroups, ...groupsToSave];
-  if (groupsToSave.length > 0) {
-    await setGroups(allMergedGroups);
-  }
-
-  // Create & save Post
+  // 2. Prepare post object
   const postId = `search_post_${Date.now()}`;
   const newPost: Post = {
     id: postId,
@@ -2255,10 +2236,7 @@ async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoin
     updatedAt: Date.now(),
   };
 
-  const existingPosts = await getPosts();
-  await setPosts([newPost, ...existingPosts.filter(p => p.id !== postId)]);
-
-  // Start background queue execution
+  // 3. IMMEDIATELY switch UI to RUNNING in 0 milliseconds!
   campaignState.isRunning = true;
   campaignState.isPaused = false;
   campaignState.status = 'RUNNING';
@@ -2266,9 +2244,11 @@ async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoin
   campaignState.completed = 0;
   campaignState.failed = 0;
   campaignState.skipped = 0;
-  campaignState.message = `🚀 Campaign started! Visiting & posting to ${groupIds.length} groups...`;
+  campaignState.message = `⚡ Super Fast Turbo Campaign Started! Visiting & posting to ${groupIds.length} groups...`;
   updateDockContent(state, initialConfig);
+  startCampaignPolling();
 
+  // 4. Send lean, instant payload to background service worker immediately
   try {
     if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
       chrome.runtime.sendMessage(
@@ -2278,27 +2258,50 @@ async function launchPostCampaign(state: AutoJoinState, initialConfig?: AutoJoin
             groupIds,
             postId,
             delaySec: pacingDelaySec,
-            groups: allMergedGroups,
+            groups: targetGroups, // Lightweight target groups only
             post: newPost,
           },
         },
         (resp) => {
           if (resp?.success) {
-            console.log('[AGP:SearchPoster] Campaign successfully queued.');
-            startCampaignPolling();
+            console.log('[AGP:SearchPoster] Campaign successfully queued & running.');
           } else {
+            console.warn('[AGP:SearchPoster] Queue start error:', resp?.error);
             campaignState.status = 'ERROR';
             campaignState.isRunning = false;
-            campaignState.message = `Failed to start campaign: ${resp?.error || 'Unknown error'}`;
+            campaignState.message = `Failed to start: ${resp?.error || 'Unknown error'}`;
             updateDockContent(state, initialConfig);
           }
         }
       );
     }
   } catch (err) {
+    console.error('[AGP:SearchPoster] Error starting campaign:', err);
     campaignState.status = 'ERROR';
     campaignState.isRunning = false;
     campaignState.message = `Error starting campaign: ${String(err)}`;
     updateDockContent(state, initialConfig);
   }
+
+  // 5. Asynchronously persist to database in background without blocking execution
+  (async () => {
+    try {
+      const existing = await getGroups();
+      const existingMap = new Map(existing.map(g => [g.groupId ? g.groupId.toLowerCase() : g.id.toLowerCase(), g]));
+      const toSave: Group[] = [];
+      for (const tg of targetGroups) {
+        if (!existingMap.has(tg.groupId.toLowerCase())) {
+          toSave.push(tg);
+          existingMap.set(tg.groupId.toLowerCase(), tg);
+        }
+      }
+      if (toSave.length > 0) {
+        await setGroups([...existing, ...toSave]);
+      }
+      const existingPosts = await getPosts();
+      await setPosts([newPost, ...existingPosts.filter(p => p.id !== postId)]);
+    } catch (saveErr) {
+      console.warn('[AGP:SearchPoster] Background group persistence warning:', saveErr);
+    }
+  })();
 }
