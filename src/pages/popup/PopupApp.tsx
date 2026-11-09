@@ -1382,7 +1382,7 @@ export const PopupApp: React.FC = () => {
     : null;
 
   return (
-    <div className="w-full sm:w-[390px] max-w-[100vw] h-screen sm:h-[580px] max-h-screen sm:max-h-[600px] bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans select-none flex flex-col shadow-2xl relative overflow-hidden">
+    <div className="w-[390px] h-[580px] min-w-[390px] min-h-[580px] max-w-[390px] max-h-[580px] bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 font-sans select-none flex flex-col shadow-2xl relative overflow-hidden">
       
       {/* Toast Alert */}
       {toastMessage && (
