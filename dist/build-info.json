@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "bcdca70a49541a8f27b2c54b6357e9ef52fe8dd2",
-  "shortSha": "bcdca70",
-  "message": "perf: make Start Join & Post instant, eliminate saving freeze, set 0s Turbo mode as default for super fast posting",
-  "commitDate": "2026-11-09T20:28:18+06:00",
-  "builtAt": "2026-11-10T08:13:59.971Z"
+  "commitSha": "b4adadfd727e6b70408323b5617d2a80c1be0e55",
+  "shortSha": "b4adadf",
+  "message": "fix: resolve mobile Kiwi post box trigger detection, handle touch events, and generate POSIX zip",
+  "commitDate": "2026-11-10T14:36:52+06:00",
+  "builtAt": "2026-11-10T17:49:07.723Z"
 }

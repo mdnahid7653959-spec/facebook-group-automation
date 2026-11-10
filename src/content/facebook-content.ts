@@ -321,85 +321,237 @@ function isElementVisible(el: HTMLElement | null): boolean {
 }
 
 /**
+ * Strictly blacklists elements that belong to cover photos, group banners,
+ * profile images, media/photo viewer links, articles, comments, or navigation.
+ * Never allows clicking cover photos or media items as composer triggers.
+ */
+function isComposerBlacklisted(el: HTMLElement | null): boolean {
+  if (!el) return true;
+
+  // 1. Tag checks
+  const tag = el.tagName.toUpperCase();
+  if (tag === 'IMG' || tag === 'SVG' || tag === 'VIDEO' || tag === 'AUDIO') {
+    return true;
+  }
+
+  // 2. Links to photos, media, albums, profiles, videos
+  if (
+    el.closest(
+      'a[href*="/photo"], a[href*="/media"], a[href*="/photos"], a[href*="/album"], a[href*="/user/"], a[href*="/watch"]'
+    )
+  ) {
+    return true;
+  }
+
+  // 3. Sections that are NOT composer: Cover photo, Group banner, Headers, Profiles, MediaViewer, Feed units, Comments
+  if (
+    el.closest(
+      '[data-pagelet*="CoverPhoto"], [data-pagelet*="GroupCover"], [data-pagelet*="Header"], [data-pagelet*="Profile"], [data-pagelet*="MediaViewer"], [role="banner"], [role="navigation"], header, [role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form, [role="complementary"]'
+    )
+  ) {
+    return true;
+  }
+
+  // 4. Aria label checks for cover, profile, avatar, badges, or specific photo labels
+  const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+  if (
+    aria.includes('cover') ||
+    aria.includes('profile') ||
+    aria.includes('avatar') ||
+    aria.includes('badge') ||
+    aria.includes('photo by') ||
+    aria.startsWith('photo:') ||
+    aria.startsWith('photo ') ||
+    aria.includes('cover photo') ||
+    aria.includes('profile photo') ||
+    aria.includes('group photo') ||
+    aria.includes('কভার ফটো') ||
+    aria.includes('প্রোফাইল ফটো')
+  ) {
+    return true;
+  }
+
+  // 5. If element itself is an image container or background image
+  if (el.getAttribute('role') === 'img') {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Checks whether text or ARIA label represents an explicit post composer trigger.
+ * Avoids false matches on large containers by requiring text to start with keyword
+ * or have short length (< 80 chars).
+ */
+function isComposerTextMatch(rawTxt: string, rawAria: string): boolean {
+  const normAria = (rawAria || '').toLowerCase();
+  const normTxt = (rawTxt || '').toLowerCase().replace(/\u2026/g, '...').trim();
+
+  const keywords = [
+    'write something',
+    'create a public post',
+    'create a post',
+    'start discussion',
+    'write discussion',
+    'what are you selling',
+    'sell something',
+    'কিছু লিখুন',
+    'পোস্ট তৈরি করুন',
+    'পাবলিক পোস্ট',
+    'আপনার মনে কী আছে',
+    'কী ভাবছেন',
+    'কী বিক্রি করছেন',
+    'কিছু বিক্রি করুন',
+    'আলোচনা শুরু করুন'
+  ];
+
+  for (const kw of keywords) {
+    if (normAria.includes(kw)) return true;
+    if (normTxt.startsWith(kw) || (normTxt.length < 80 && normTxt.includes(kw))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Detects and instantly closes Facebook's full-screen theater photo/media viewer.
+ * This prevents the extension from getting stuck if Facebook opened a photo viewer.
+ */
+async function closePhotoViewerIfOpen(): Promise<boolean> {
+  const isTheater =
+    window.location.href.includes('/photo') ||
+    Boolean(
+      document.querySelector(
+        '[data-pagelet*="MediaViewer"], div[aria-label="Close"][role="button"], img[data-visualcompletion="media-vc-image"]'
+      )
+    );
+
+  if (!isTheater) return false;
+
+  console.log('[AGP:AutoPost] Photo theater viewer detected! Closing it to return to group page...');
+
+  // 1. Try clicking the top-left Close (X) button
+  const closeBtn = document.querySelector<HTMLElement>(
+    '[aria-label="Close" i][role="button"], [aria-label="Close" i], [aria-label="Exit" i], div[aria-label="Close" i], [data-pagelet*="MediaViewer"] [aria-label*="Close" i]'
+  );
+  if (closeBtn && isElementVisible(closeBtn)) {
+    try {
+      closeBtn.click();
+      await sleep(350);
+      return true;
+    } catch (_) {}
+  }
+
+  // 2. Dispatch Escape key to dismiss viewer
+  try {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true }));
+    await sleep(300);
+  } catch (_) {}
+
+  // 3. If URL still has /photo, navigate back to group
+  if (window.location.href.includes('/photo')) {
+    try {
+      window.history.back();
+      await sleep(500);
+    } catch (_) {}
+  }
+
+  return true;
+}
+
+/**
+ * Attempts to switch to the "Discussion" tab if the composer is hidden under another group tab.
+ */
+function trySwitchToDiscussionTab(): boolean {
+  const tabs = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"], a[role="tab"], [role="tablist"] a'));
+  for (const tab of tabs) {
+    const text = (tab.textContent || '').trim().toLowerCase();
+    const href = (tab.getAttribute('href') || '').toLowerCase();
+    if (text === 'discussion' || text === 'আলোচনা' || href.endsWith('/discussion') || href.endsWith('/discussion/')) {
+      try {
+        tab.click();
+        console.log('[AGP:AutoPost] Clicked "Discussion" tab to reveal composer.');
+        return true;
+      } catch (_) {}
+    }
+  }
+  return false;
+}
+
+/**
  * Locates Facebook's "Write something..." / "Create a public post" trigger element.
  * Fully supports mobile Kiwi/Lemur browsers, touch screens, and desktop layouts.
- * Handles Unicode ellipsis, nested spans/divs, and inline Photo button triggers.
- * Strictly excludes comment boxes, articles, and feed post elements.
+ * Strictly excludes cover photos, profile images, media links, and feed posts.
  */
 function findComposerTrigger(): HTMLElement | null {
-  // Strategy 1: Search for any element whose text or aria-label indicates writing a post
-  const queryScope = document.querySelectorAll<HTMLElement>(
-    '[role="main"] span, [role="main"] div, [role="main"] [role="button"], span, div, [role="button"]'
-  );
-
-  for (const el of Array.from(queryScope)) {
-    // Strictly exclude feed posts, comments, articles, sidebars, forms
-    if (el.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form, [role="complementary"]')) {
-      continue;
-    }
-
-    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-    const rawTxt = (el.textContent || '').trim().toLowerCase();
-    const txt = rawTxt.replace(/\u2026/g, '...');
-
-    const isMatch =
-      aria.includes('write something') ||
-      aria.includes('create a public post') ||
-      aria.includes('create a post') ||
-      aria.includes('start discussion') ||
-      aria.includes('write discussion') ||
-      aria.includes('কিছু লিখুন') ||
-      aria.includes('পোস্ট তৈরি করুন') ||
-      aria.includes('পাবলিক পোস্ট') ||
-      aria.includes('আপনার মনে কী আছে') ||
-      aria.includes('কী ভাবছেন') ||
-      txt.includes('write something') ||
-      txt.includes('create a public post') ||
-      txt.includes('create a post') ||
-      txt.includes('start discussion') ||
-      txt.includes('write discussion') ||
-      txt.includes('কিছু লিখুন') ||
-      txt.includes('পোস্ট তৈরি করুন') ||
-      txt.includes('পাবলিক পোস্ট') ||
-      txt.includes('আপনার মনে কী আছে') ||
-      txt.includes('কী ভাবছেন');
-
-    if (isMatch) {
-      const clickable =
-        el.closest<HTMLElement>('[role="button"], button') ||
-        el.closest<HTMLElement>('[tabindex="0"]') ||
-        el;
-      if (clickable && isElementVisible(clickable)) {
-        return clickable;
-      }
-    }
-  }
-
-  // Strategy 2: Look for the Photo / Video trigger in the composer area
-  // In Facebook groups, clicking "Photo" directly in the inline composer card immediately opens the Create Post dialog!
-  const photoTriggers = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[role="main"] [aria-label*="Photo" i], [role="main"] [aria-label*="ছবি" i], [aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]'
-    )
-  );
-  for (const pt of photoTriggers) {
-    if (pt.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form')) continue;
-    const clickable = pt.closest<HTMLElement>('[role="button"], button') || pt;
-    if (clickable && isElementVisible(clickable)) {
-      return clickable;
-    }
-  }
-
-  // Strategy 3: Named Composer Pagelets
+  // Strategy 1: Check inside dedicated composer pagelets (highest reliability)
   const composerContainers = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[data-pagelet="GroupInlineComposer"], [data-pagelet="FeedInlineComposer"], [data-pagelet="GroupComposer"], [data-pagelet*="Composer" i]'
     )
   );
+
   for (const container of composerContainers) {
-    if (container.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form')) continue;
-    const trigger = container.querySelector<HTMLElement>('[role="button"], div[tabindex="0"], div');
-    if (trigger && isElementVisible(trigger)) return trigger;
+    if (isComposerBlacklisted(container)) continue;
+
+    // Look for text trigger inside the composer card
+    const candidates = Array.from(container.querySelectorAll<HTMLElement>('span, div, [role="button"], button'));
+    for (const el of candidates) {
+      if (isComposerBlacklisted(el)) continue;
+      const aria = el.getAttribute('aria-label') || '';
+      const txt = el.textContent || '';
+      if (isComposerTextMatch(txt, aria)) {
+        const clickable = el.closest<HTMLElement>('[role="button"], button') || el.closest<HTMLElement>('[tabindex="0"]') || el;
+        if (clickable && isElementVisible(clickable) && !isComposerBlacklisted(clickable)) {
+          return clickable;
+        }
+      }
+    }
+
+    // Look for Photo/Video quick button INSIDE this composer container only
+    const photoBtn = container.querySelector<HTMLElement>(
+      '[aria-label*="Photo/video" i], [aria-label*="Photo / video" i], [aria-label*="Add Photos" i], [aria-label*="ছবি/ভিডিও" i], [aria-label*="ছবি" i], [aria-label*="Photo" i]'
+    );
+    if (photoBtn && isElementVisible(photoBtn) && !isComposerBlacklisted(photoBtn)) {
+      const clickable = photoBtn.closest<HTMLElement>('[role="button"], button') || photoBtn;
+      if (clickable && isElementVisible(clickable) && !isComposerBlacklisted(clickable)) {
+        return clickable;
+      }
+    }
+
+    // Any generic clickable pill inside the composer card
+    const firstPill = container.querySelector<HTMLElement>('[role="button"], div[tabindex="0"]');
+    if (firstPill && isElementVisible(firstPill) && !isComposerBlacklisted(firstPill)) {
+      return firstPill;
+    }
+  }
+
+  // Strategy 2: Broad semantic search across [role="main"]
+  const queryScope = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[role="main"] [role="button"], [role="main"] div[tabindex="0"], [role="main"] span, [role="main"] div'
+    )
+  );
+
+  for (const el of queryScope) {
+    if (isComposerBlacklisted(el)) continue;
+
+    const aria = el.getAttribute('aria-label') || '';
+    const txt = el.textContent || '';
+
+    if (isComposerTextMatch(txt, aria)) {
+      const clickable =
+        el.closest<HTMLElement>('[role="button"], button') ||
+        el.closest<HTMLElement>('[tabindex="0"]') ||
+        el;
+      if (clickable && isElementVisible(clickable) && !isComposerBlacklisted(clickable)) {
+        return clickable;
+      }
+    }
   }
 
   return null;
@@ -407,7 +559,7 @@ function findComposerTrigger(): HTMLElement | null {
 
 /**
  * Detects if the Facebook Create Post dialog is currently open.
- * Strictly excludes comment boxes, chat tabs, and feed units.
+ * Strictly excludes theater photo/media viewers, comment boxes, and chat tabs.
  */
 function findOpenPostDialog(): HTMLElement | null {
   const dialogs = Array.from(
@@ -416,30 +568,60 @@ function findOpenPostDialog(): HTMLElement | null {
     )
   );
   for (const d of dialogs) {
-    if (isElementVisible(d)) {
-      // Exclude chat tabs, comment popups, image viewers
-      if (d.closest('[role="article"]') || d.querySelector('[data-pagelet*="ChatTab"], [aria-label*="Messenger" i]')) continue;
+    if (!isElementVisible(d)) continue;
 
-      const text = (d.textContent || '').toLowerCase();
-      const aria = (d.getAttribute('aria-label') || '').toLowerCase();
+    // 1. Strictly exclude photo viewer, media viewer, theater mode
+    if (
+      d.getAttribute('data-pagelet')?.toLowerCase().includes('mediaviewer') ||
+      d.querySelector('[data-pagelet*="MediaViewer"], img[data-visualcompletion="media-vc-image"], div[aria-label*="Photo viewer" i]')
+    ) {
+      continue;
+    }
 
-      const hasEditor = Boolean(d.querySelector('div[role="textbox"][contenteditable="true"], div[contenteditable="true"]'));
-      const hasPostBtn = Boolean(d.querySelector('[aria-label="Post"], [aria-label="Publish"], [aria-label="পোস্ট"], [aria-label="সাবমিট"]'));
+    // 2. Exclude chat tabs, messenger windows, comment popups, feed articles
+    if (
+      d.closest('[role="article"]') ||
+      d.querySelector('[data-pagelet*="ChatTab"], [aria-label*="Messenger" i], [aria-label*="Chats" i]')
+    ) {
+      continue;
+    }
 
-      const isPostModal =
-        hasEditor ||
-        hasPostBtn ||
-        aria.includes('create post') ||
-        aria.includes('create a public post') ||
-        aria.includes('পোস্ট তৈরি করুন') ||
-        text.includes('create post') ||
-        text.includes('create a public post') ||
-        text.includes('add to your post') ||
-        text.includes('পোস্ট তৈরি করুন') ||
-        text.includes('আপনার পোস্টে যোগ করুন') ||
-        Boolean(d.querySelector('[aria-label*="Add to your post" i], [aria-label*="আপনার পোস্টে যোগ করুন" i], [aria-label*="Photo/video" i]'));
+    const text = (d.textContent || '').toLowerCase();
+    const aria = (d.getAttribute('aria-label') || '').toLowerCase();
 
-      if (isPostModal) return d;
+    // Check for Post / Publish submit button
+    const hasPostBtn = Boolean(
+      d.querySelector(
+        '[aria-label="Post" i], [aria-label="Publish" i], [aria-label="পোস্ট" i], [aria-label="সাবমিট" i], div[aria-label="Next" i], [role="button"][aria-label="Post" i]'
+      )
+    );
+
+    // Check for "Add to your post" toolbar
+    const hasAddToPost = Boolean(
+      d.querySelector(
+        '[aria-label*="Add to your post" i], [aria-label*="আপনার পোস্টে যোগ করুন" i], [aria-label*="Photo/video" i]'
+      ) ||
+      text.includes('add to your post') ||
+      text.includes('আপনার পোস্টে যোগ করুন')
+    );
+
+    const isPostHeader =
+      aria.includes('create post') ||
+      aria.includes('create a post') ||
+      aria.includes('create a public post') ||
+      aria.includes('পোস্ট তৈরি করুন') ||
+      text.includes('create a public post') ||
+      text.includes('create post') ||
+      text.includes('পোস্ট তৈরি করুন');
+
+    // Only accept if genuine composer indicators exist (not a comment box)
+    if (hasPostBtn || hasAddToPost || isPostHeader) {
+      const hasEditor = Boolean(
+        d.querySelector('div[role="textbox"][contenteditable="true"], div[contenteditable="true"]')
+      );
+      if (hasEditor || hasPostBtn || hasAddToPost) {
+        return d;
+      }
     }
   }
   return null;
@@ -470,24 +652,31 @@ function isFacebookPageUnavailable(): boolean {
 
 /**
  * Clicks the composer trigger and waits for the dialog to open.
- * Dispatches Touch, Pointer, and Mouse events with automatic fallback to Photo trigger.
+ * Dispatches Touch, Pointer, and Mouse events.
+ * Strictly prevents opening cover photos or media viewer.
  */
 async function openComposerModal(): Promise<HTMLElement | null> {
   if (isFacebookPageUnavailable()) return null;
 
+  // 0. If Facebook photo viewer / theater is currently open, close it immediately!
+  await closePhotoViewerIfOpen();
+
   let dialog = findOpenPostDialog();
   if (dialog) return dialog;
 
-  // High-speed reactive polling for composer trigger (20ms checks, up to 4.5s)
+  // High-speed reactive polling for composer trigger (25ms checks, up to 4.5s)
   let trigger = findComposerTrigger();
   if (!trigger) {
+    // If not found, try switching to Discussion tab in case group opened on another tab
+    trySwitchToDiscussionTab();
+
     const triggerStart = Date.now();
     while (Date.now() - triggerStart < 4500) {
       dialog = findOpenPostDialog();
       if (dialog) return dialog;
       trigger = findComposerTrigger();
       if (trigger) break;
-      await sleep(20);
+      await sleep(25);
     }
   }
 
@@ -510,36 +699,25 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
   trigger.click();
 
-  // Also click any direct child span or div
+  // Also click any direct child span or div if trigger is a wrapper
   const innerTarget = trigger.querySelector<HTMLElement>('span, div');
-  if (innerTarget && innerTarget !== trigger) {
+  if (innerTarget && innerTarget !== trigger && !isComposerBlacklisted(innerTarget)) {
     try {
       innerTarget.click();
     } catch (_) {}
   }
 
-  dialog = findOpenPostDialog();
-  if (dialog) return dialog;
-
+  // Poll for dialog opening
   const start = Date.now();
   while (Date.now() - start < 4500) {
     dialog = findOpenPostDialog();
     if (dialog) return dialog;
-    await sleep(20);
+    await sleep(25);
   }
 
-  // 2. Fallback: If dialog didn't open yet, try clicking any Photo button in composer card
-  const fallbackPhotoBtn = document.querySelector<HTMLElement>(
-    '[role="main"] [aria-label*="Photo" i]:not([role="article"] *), [role="main"] [aria-label*="ছবি" i]:not([role="article"] *)'
-  );
-  if (fallbackPhotoBtn) {
-    try {
-      fallbackPhotoBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
-      fallbackPhotoBtn.click();
-      await sleep(400);
-      dialog = findOpenPostDialog();
-      if (dialog) return dialog;
-    } catch (_) {}
+  // Check if accidental photo viewer opened anyway, and close it immediately
+  if (await closePhotoViewerIfOpen()) {
+    console.warn('[AGP:AutoPost] Accidental photo viewer closed.');
   }
 
   return null;
