@@ -249,6 +249,8 @@ function extractGroupName(anchor: HTMLElement, card: HTMLElement, slugOrId: stri
     name = (heading?.textContent || '').trim();
   }
   name = name.split('\n')[0].trim();
+  // Strip thumbnail/avatar prefixes
+  name = name.replace(/^(?:Profile photo of|Profile picture of|Photo of|Cover photo of|প্রোফাইল ছবি|কভার ছবি)\s*/i, '');
   // Filter out action words that are definitely not group names
   const lower = name.toLowerCase();
   if (lower === 'join' || lower === 'যোগ দিন' || lower === 'view group' || lower === 'গ্রুপ দেখুন' || lower === 'visit' || lower === 'joined') {

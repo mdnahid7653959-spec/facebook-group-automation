@@ -200,6 +200,7 @@ export function detectEndOfListIndicator(root: Document | Element = document): b
 function cleanCandidateText(raw: string): string {
   if (!raw) return '';
   let s = raw.trim();
+  s = s.replace(/^(?:Profile photo of|Profile picture of|Photo of|Cover photo of|প্রোফাইল ছবি|কভার ছবি)\s*/i, '');
   s = s.replace(/^(?:Visit group|Visit|Open group|Open|View group|View|গ্রুপ দেখুন|দেখুন|গ্রুপে যান)\s*/i, '');
   s = s.replace(/\s*(?:Last active|You last visited|last visited|active)\s+[^\n]+/i, '');
   s = s.replace(/\s*(?:গত|আগে|মিনিট আগে|ঘণ্টা আগে|দিন আগে)[^\n]*/i, '');

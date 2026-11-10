@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "b4adadfd727e6b70408323b5617d2a80c1be0e55",
-  "shortSha": "b4adadf",
-  "message": "fix: resolve mobile Kiwi post box trigger detection, handle touch events, and generate POSIX zip",
-  "commitDate": "2026-11-10T14:36:52+06:00",
-  "builtAt": "2026-11-10T17:49:07.723Z"
+  "commitSha": "386dc06f87d134f197ec847ae779d5a747f56908",
+  "shortSha": "386dc06",
+  "message": "fix: strictly blacklist cover photos and media viewers, prevent opening group photos",
+  "commitDate": "2026-11-10T23:49:57+06:00",
+  "builtAt": "2026-11-10T18:05:02.703Z"
 }

@@ -322,56 +322,63 @@ function isElementVisible(el: HTMLElement | null): boolean {
 
 /**
  * Strictly blacklists elements that belong to cover photos, group banners,
- * profile images, media/photo viewer links, articles, comments, or navigation.
- * Never allows clicking cover photos or media items as composer triggers.
+ * media viewer links, or comments.
+ * Never allows clicking cover photos or media viewer items as composer triggers.
  */
 function isComposerBlacklisted(el: HTMLElement | null): boolean {
   if (!el) return true;
 
-  // 1. Tag checks
+  // 1. Tag checks: never consider raw images, icons, or videos as the composer pill
   const tag = el.tagName.toUpperCase();
   if (tag === 'IMG' || tag === 'SVG' || tag === 'VIDEO' || tag === 'AUDIO') {
     return true;
   }
 
-  // 2. Links to photos, media, albums, profiles, videos
+  // 2. Cover photo and banners
   if (
     el.closest(
-      'a[href*="/photo"], a[href*="/media"], a[href*="/photos"], a[href*="/album"], a[href*="/user/"], a[href*="/watch"]'
+      '[data-pagelet*="CoverPhoto"], [data-pagelet*="GroupCover"], [data-pagelet*="GroupBanner"], div[data-pagelet="CoverPhoto"]'
     )
   ) {
     return true;
   }
 
-  // 3. Sections that are NOT composer: Cover photo, Group banner, Headers, Profiles, MediaViewer, Feed units, Comments
+  // 3. Full-screen media viewer or theater mode
+  if (el.closest('[data-pagelet*="MediaViewer"], div[aria-label*="Photo viewer" i]')) {
+    return true;
+  }
+
+  // 4. Links to specific photos, videos, albums, or individual post permalinks
   if (
     el.closest(
-      '[data-pagelet*="CoverPhoto"], [data-pagelet*="GroupCover"], [data-pagelet*="Header"], [data-pagelet*="Profile"], [data-pagelet*="MediaViewer"], [role="banner"], [role="navigation"], header, [role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form, [role="complementary"]'
+      'a[href*="/photo/"], a[href*="/photos/"], a[href*="/media/"], a[href*="/album/"], a[href*="/videos/"], a[href*="/posts/"], a[href*="/permalink/"]'
     )
   ) {
     return true;
   }
 
-  // 4. Aria label checks for cover, profile, avatar, badges, or specific photo labels
+  // 5. Comments, comment boxes, and post reaction menus
+  if (
+    el.closest(
+      '[data-pagelet*="Comment"], [aria-label*="Comment as" i], [aria-label="Write a comment" i], [aria-label*="Actions for this post" i], [aria-label*="Like" i]'
+    )
+  ) {
+    return true;
+  }
+
+  // 6. Aria labels that identify cover/profile photos
   const aria = (el.getAttribute('aria-label') || '').toLowerCase();
   if (
-    aria.includes('cover') ||
-    aria.includes('profile') ||
-    aria.includes('avatar') ||
-    aria.includes('badge') ||
-    aria.includes('photo by') ||
-    aria.startsWith('photo:') ||
-    aria.startsWith('photo ') ||
     aria.includes('cover photo') ||
-    aria.includes('profile photo') ||
-    aria.includes('group photo') ||
     aria.includes('কভার ফটো') ||
-    aria.includes('প্রোফাইল ফটো')
+    aria.startsWith('photo:') ||
+    aria.includes('photo by') ||
+    aria.includes('profile picture') ||
+    aria.includes('প্রোফাইল ছবি')
   ) {
     return true;
   }
 
-  // 5. If element itself is an image container or background image
   if (el.getAttribute('role') === 'img') {
     return true;
   }
@@ -379,38 +386,52 @@ function isComposerBlacklisted(el: HTMLElement | null): boolean {
   return false;
 }
 
+const COMPOSER_KEYWORDS = [
+  "what's on your mind",
+  "whats on your mind",
+  "what is on your mind",
+  "write something",
+  "write something to",
+  "create a public post",
+  "create a post",
+  "create post",
+  "write post",
+  "start discussion",
+  "write discussion",
+  "what are you selling",
+  "sell something",
+  "anonymous post",
+  "পোস্ট তৈরি করুন",
+  "একটি পোস্ট তৈরি করুন",
+  "কিছু লিখুন",
+  "পাবলিক পোস্ট",
+  "আপনার মনে কী আছে",
+  "আপনার মনে কি আছে",
+  "আপনার মনে কি চলছে",
+  "কী ভাবছেন",
+  "কি ভাবছেন",
+  "আলোচনা শুরু করুন",
+  "কী বিক্রি করছেন",
+  "কি বিক্রি করছেন",
+  "কিছু বিক্রি করুন",
+  "বেনামী পোস্ট",
+  "discussion",
+  "আলোচনা"
+];
+
 /**
- * Checks whether text or ARIA label represents an explicit post composer trigger.
- * Avoids false matches on large containers by requiring text to start with keyword
- * or have short length (< 80 chars).
+ * Checks whether text, ARIA label, or placeholder represents an explicit post composer trigger.
  */
-function isComposerTextMatch(rawTxt: string, rawAria: string): boolean {
+function isComposerTextMatch(rawTxt: string, rawAria: string, rawPlaceholder?: string): boolean {
   const normAria = (rawAria || '').toLowerCase();
   const normTxt = (rawTxt || '').toLowerCase().replace(/\u2026/g, '...').trim();
+  const normPh = (rawPlaceholder || '').toLowerCase();
 
-  const keywords = [
-    'write something',
-    'create a public post',
-    'create a post',
-    'start discussion',
-    'write discussion',
-    'what are you selling',
-    'sell something',
-    'কিছু লিখুন',
-    'পোস্ট তৈরি করুন',
-    'পাবলিক পোস্ট',
-    'আপনার মনে কী আছে',
-    'কী ভাবছেন',
-    'কী বিক্রি করছেন',
-    'কিছু বিক্রি করুন',
-    'আলোচনা শুরু করুন'
-  ];
-
-  for (const kw of keywords) {
+  for (const kw of COMPOSER_KEYWORDS) {
     if (normAria.includes(kw)) return true;
-    if (normTxt.startsWith(kw) || (normTxt.length < 80 && normTxt.includes(kw))) {
-      return true;
-    }
+    if (normPh.includes(kw)) return true;
+    if (normTxt.startsWith(kw)) return true;
+    if (normTxt.length < 120 && normTxt.includes(kw)) return true;
   }
 
   return false;
@@ -465,13 +486,20 @@ async function closePhotoViewerIfOpen(): Promise<boolean> {
 
 /**
  * Attempts to switch to the "Discussion" tab if the composer is hidden under another group tab.
+ * Crucial for Buy & Sell groups that land on "Featured" or "Items for sale" tabs.
  */
 function trySwitchToDiscussionTab(): boolean {
-  const tabs = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"], a[role="tab"], [role="tablist"] a'));
+  const tabs = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"], a[role="tab"], [role="tablist"] a, a[href*="/discussion"]'));
   for (const tab of tabs) {
     const text = (tab.textContent || '').trim().toLowerCase();
     const href = (tab.getAttribute('href') || '').toLowerCase();
-    if (text === 'discussion' || text === 'আলোচনা' || href.endsWith('/discussion') || href.endsWith('/discussion/')) {
+    if (
+      text === 'discussion' ||
+      text === 'আলোচনা' ||
+      href.endsWith('/discussion') ||
+      href.endsWith('/discussion/') ||
+      href.includes('/discussion/?')
+    ) {
       try {
         tab.click();
         console.log('[AGP:AutoPost] Clicked "Discussion" tab to reveal composer.');
@@ -488,7 +516,7 @@ function trySwitchToDiscussionTab(): boolean {
  * Strictly excludes cover photos, profile images, media links, and feed posts.
  */
 function findComposerTrigger(): HTMLElement | null {
-  // Strategy 1: Check inside dedicated composer pagelets (highest reliability)
+  // Layer 1: Dedicated composer pagelets (Highest reliability)
   const composerContainers = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[data-pagelet="GroupInlineComposer"], [data-pagelet="FeedInlineComposer"], [data-pagelet="GroupComposer"], [data-pagelet*="Composer" i]'
@@ -498,13 +526,14 @@ function findComposerTrigger(): HTMLElement | null {
   for (const container of composerContainers) {
     if (isComposerBlacklisted(container)) continue;
 
-    // Look for text trigger inside the composer card
-    const candidates = Array.from(container.querySelectorAll<HTMLElement>('span, div, [role="button"], button'));
+    // A. Look for text trigger inside the composer card
+    const candidates = Array.from(container.querySelectorAll<HTMLElement>('span, div, [role="button"], button, textarea, input'));
     for (const el of candidates) {
       if (isComposerBlacklisted(el)) continue;
       const aria = el.getAttribute('aria-label') || '';
       const txt = el.textContent || '';
-      if (isComposerTextMatch(txt, aria)) {
+      const ph = el.getAttribute('placeholder') || '';
+      if (isComposerTextMatch(txt, aria, ph)) {
         const clickable = el.closest<HTMLElement>('[role="button"], button') || el.closest<HTMLElement>('[tabindex="0"]') || el;
         if (clickable && isElementVisible(clickable) && !isComposerBlacklisted(clickable)) {
           return clickable;
@@ -512,7 +541,7 @@ function findComposerTrigger(): HTMLElement | null {
       }
     }
 
-    // Look for Photo/Video quick button INSIDE this composer container only
+    // B. Look for Photo/Video quick button INSIDE this composer container only
     const photoBtn = container.querySelector<HTMLElement>(
       '[aria-label*="Photo/video" i], [aria-label*="Photo / video" i], [aria-label*="Add Photos" i], [aria-label*="ছবি/ভিডিও" i], [aria-label*="ছবি" i], [aria-label*="Photo" i]'
     );
@@ -523,17 +552,17 @@ function findComposerTrigger(): HTMLElement | null {
       }
     }
 
-    // Any generic clickable pill inside the composer card
+    // C. Any generic clickable pill inside the composer card
     const firstPill = container.querySelector<HTMLElement>('[role="button"], div[tabindex="0"]');
     if (firstPill && isElementVisible(firstPill) && !isComposerBlacklisted(firstPill)) {
       return firstPill;
     }
   }
 
-  // Strategy 2: Broad semantic search across [role="main"]
+  // Layer 2: Global semantic scan across [role="main"] and group feed
   const queryScope = Array.from(
     document.querySelectorAll<HTMLElement>(
-      '[role="main"] [role="button"], [role="main"] div[tabindex="0"], [role="main"] span, [role="main"] div'
+      '[role="main"] [role="button"], [role="main"] div[tabindex="0"], [role="main"] span, [role="main"] div, div[role="feed"] [role="button"], div[role="feed"] span, div[role="button"], button, span'
     )
   );
 
@@ -542,8 +571,9 @@ function findComposerTrigger(): HTMLElement | null {
 
     const aria = el.getAttribute('aria-label') || '';
     const txt = el.textContent || '';
+    const ph = el.getAttribute('placeholder') || '';
 
-    if (isComposerTextMatch(txt, aria)) {
+    if (isComposerTextMatch(txt, aria, ph)) {
       const clickable =
         el.closest<HTMLElement>('[role="button"], button') ||
         el.closest<HTMLElement>('[tabindex="0"]') ||
@@ -554,14 +584,26 @@ function findComposerTrigger(): HTMLElement | null {
     }
   }
 
+  // Layer 3: Mobile web / mbasic / m.facebook.com composer elements
+  const mobileTriggers = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      'div[data-sigil*="m-composer"], div#MComposer, textarea[name="status"], button[value="Post"], div[role="button"][data-sigil*="touchable"]'
+    )
+  );
+  for (const mt of mobileTriggers) {
+    if (isElementVisible(mt) && !isComposerBlacklisted(mt)) return mt;
+  }
+
   return null;
 }
 
 /**
  * Detects if the Facebook Create Post dialog is currently open.
  * Strictly excludes theater photo/media viewers, comment boxes, and chat tabs.
+ * Supports both modal dialogs and expanded in-place inline composers.
  */
 function findOpenPostDialog(): HTMLElement | null {
+  // 1. Check modal dialogs
   const dialogs = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[role="dialog"], [aria-modal="true"], div[data-pagelet*="ComposerModal"]'
@@ -570,7 +612,7 @@ function findOpenPostDialog(): HTMLElement | null {
   for (const d of dialogs) {
     if (!isElementVisible(d)) continue;
 
-    // 1. Strictly exclude photo viewer, media viewer, theater mode
+    // Strictly exclude photo viewer, media viewer, theater mode
     if (
       d.getAttribute('data-pagelet')?.toLowerCase().includes('mediaviewer') ||
       d.querySelector('[data-pagelet*="MediaViewer"], img[data-visualcompletion="media-vc-image"], div[aria-label*="Photo viewer" i]')
@@ -578,7 +620,7 @@ function findOpenPostDialog(): HTMLElement | null {
       continue;
     }
 
-    // 2. Exclude chat tabs, messenger windows, comment popups, feed articles
+    // Exclude chat tabs, messenger windows, comment popups, feed articles
     if (
       d.closest('[role="article"]') ||
       d.querySelector('[data-pagelet*="ChatTab"], [aria-label*="Messenger" i], [aria-label*="Chats" i]')
@@ -612,7 +654,9 @@ function findOpenPostDialog(): HTMLElement | null {
       aria.includes('পোস্ট তৈরি করুন') ||
       text.includes('create a public post') ||
       text.includes('create post') ||
-      text.includes('পোস্ট তৈরি করুন');
+      text.includes('পোস্ট তৈরি করুন') ||
+      text.includes('what are you selling') ||
+      text.includes('কী বিক্রি করছেন');
 
     // Only accept if genuine composer indicators exist (not a comment box)
     if (hasPostBtn || hasAddToPost || isPostHeader) {
@@ -624,6 +668,22 @@ function findOpenPostDialog(): HTMLElement | null {
       }
     }
   }
+
+  // 2. Check for expanded in-place inline composer card (common on responsive desktop and mobile)
+  const inlineEditors = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[data-pagelet*="Composer"] div[role="textbox"][contenteditable="true"], [data-pagelet*="InlineComposer"] div[role="textbox"][contenteditable="true"]'
+    )
+  );
+  for (const ie of inlineEditors) {
+    if (!isElementVisible(ie)) continue;
+    if (ie.closest('[aria-label*="Comment" i], [data-pagelet*="Comment"]')) continue;
+    const parentContainer = ie.closest<HTMLElement>('[data-pagelet*="Composer"], [data-pagelet*="InlineComposer"]') || ie.parentElement;
+    if (parentContainer && isElementVisible(parentContainer)) {
+      return parentContainer;
+    }
+  }
+
   return null;
 }
 
@@ -664,19 +724,45 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   let dialog = findOpenPostDialog();
   if (dialog) return dialog;
 
-  // High-speed reactive polling for composer trigger (25ms checks, up to 4.5s)
+  // 1. First attempt to find trigger immediately
   let trigger = findComposerTrigger();
-  if (!trigger) {
-    // If not found, try switching to Discussion tab in case group opened on another tab
-    trySwitchToDiscussionTab();
 
+  if (!trigger) {
+    // Scroll to the very top to ensure composer card is in view
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    await sleep(200);
+    dialog = findOpenPostDialog();
+    if (dialog) return dialog;
+    trigger = findComposerTrigger();
+  }
+
+  if (!trigger) {
+    // If not found, switch to Discussion tab (crucial for Buy & Sell groups!)
+    trySwitchToDiscussionTab();
+    await sleep(350);
+    dialog = findOpenPostDialog();
+    if (dialog) return dialog;
+    trigger = findComposerTrigger();
+  }
+
+  if (!trigger) {
+    // Scroll down slightly (350px) past the cover photo to trigger lazy rendering of composer
+    window.scrollTo({ top: 350, behavior: 'instant' });
+    await sleep(200);
+    dialog = findOpenPostDialog();
+    if (dialog) return dialog;
+    trigger = findComposerTrigger();
+  }
+
+  if (!trigger) {
+    // Reactive polling (up to 5.5s)
     const triggerStart = Date.now();
-    while (Date.now() - triggerStart < 4500) {
+    while (Date.now() - triggerStart < 5500) {
       dialog = findOpenPostDialog();
       if (dialog) return dialog;
       trigger = findComposerTrigger();
       if (trigger) break;
-      await sleep(25);
+      await sleep(30);
     }
   }
 
@@ -686,8 +772,9 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   }
 
   trigger.scrollIntoView({ behavior: 'instant', block: 'center' });
+  await sleep(40);
 
-  // 1. Touch & Mouse dispatch for mobile Kiwi & touch screens
+  // Touch & Mouse dispatch for mobile Kiwi & touch screens
   try {
     trigger.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true }));
     trigger.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
@@ -707,9 +794,9 @@ async function openComposerModal(): Promise<HTMLElement | null> {
     } catch (_) {}
   }
 
-  // Poll for dialog opening
+  // Poll for dialog opening (up to 5.5s)
   const start = Date.now();
-  while (Date.now() - start < 4500) {
+  while (Date.now() - start < 5500) {
     dialog = findOpenPostDialog();
     if (dialog) return dialog;
     await sleep(25);
