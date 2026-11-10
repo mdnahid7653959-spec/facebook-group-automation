@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "ac2deffdc27a287d6cc131ba96579a7257298096",
-  "shortSha": "ac2deff",
-  "message": "fix: restore fixed popup dimensions to resolve collapsed black box popup window",
-  "commitDate": "2026-11-09T20:07:54+06:00",
-  "builtAt": "2026-11-09T14:28:01.017Z"
+  "commitSha": "bcdca70a49541a8f27b2c54b6357e9ef52fe8dd2",
+  "shortSha": "bcdca70",
+  "message": "perf: make Start Join & Post instant, eliminate saving freeze, set 0s Turbo mode as default for super fast posting",
+  "commitDate": "2026-11-09T20:28:18+06:00",
+  "builtAt": "2026-11-10T08:13:59.971Z"
 }

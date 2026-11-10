@@ -322,10 +322,75 @@ function isElementVisible(el: HTMLElement | null): boolean {
 
 /**
  * Locates Facebook's "Write something..." / "Create a public post" trigger element.
+ * Fully supports mobile Kiwi/Lemur browsers, touch screens, and desktop layouts.
+ * Handles Unicode ellipsis, nested spans/divs, and inline Photo button triggers.
  * Strictly excludes comment boxes, articles, and feed post elements.
  */
 function findComposerTrigger(): HTMLElement | null {
-  // Strategy 1: Named Composer Pagelets at the top of the group
+  // Strategy 1: Search for any element whose text or aria-label indicates writing a post
+  const queryScope = document.querySelectorAll<HTMLElement>(
+    '[role="main"] span, [role="main"] div, [role="main"] [role="button"], span, div, [role="button"]'
+  );
+
+  for (const el of Array.from(queryScope)) {
+    // Strictly exclude feed posts, comments, articles, sidebars, forms
+    if (el.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form, [role="complementary"]')) {
+      continue;
+    }
+
+    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+    const rawTxt = (el.textContent || '').trim().toLowerCase();
+    const txt = rawTxt.replace(/\u2026/g, '...');
+
+    const isMatch =
+      aria.includes('write something') ||
+      aria.includes('create a public post') ||
+      aria.includes('create a post') ||
+      aria.includes('start discussion') ||
+      aria.includes('write discussion') ||
+      aria.includes('কিছু লিখুন') ||
+      aria.includes('পোস্ট তৈরি করুন') ||
+      aria.includes('পাবলিক পোস্ট') ||
+      aria.includes('আপনার মনে কী আছে') ||
+      aria.includes('কী ভাবছেন') ||
+      txt.includes('write something') ||
+      txt.includes('create a public post') ||
+      txt.includes('create a post') ||
+      txt.includes('start discussion') ||
+      txt.includes('write discussion') ||
+      txt.includes('কিছু লিখুন') ||
+      txt.includes('পোস্ট তৈরি করুন') ||
+      txt.includes('পাবলিক পোস্ট') ||
+      txt.includes('আপনার মনে কী আছে') ||
+      txt.includes('কী ভাবছেন');
+
+    if (isMatch) {
+      const clickable =
+        el.closest<HTMLElement>('[role="button"], button') ||
+        el.closest<HTMLElement>('[tabindex="0"]') ||
+        el;
+      if (clickable && isElementVisible(clickable)) {
+        return clickable;
+      }
+    }
+  }
+
+  // Strategy 2: Look for the Photo / Video trigger in the composer area
+  // In Facebook groups, clicking "Photo" directly in the inline composer card immediately opens the Create Post dialog!
+  const photoTriggers = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[role="main"] [aria-label*="Photo" i], [role="main"] [aria-label*="ছবি" i], [aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]'
+    )
+  );
+  for (const pt of photoTriggers) {
+    if (pt.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form')) continue;
+    const clickable = pt.closest<HTMLElement>('[role="button"], button') || pt;
+    if (clickable && isElementVisible(clickable)) {
+      return clickable;
+    }
+  }
+
+  // Strategy 3: Named Composer Pagelets
   const composerContainers = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[data-pagelet="GroupInlineComposer"], [data-pagelet="FeedInlineComposer"], [data-pagelet="GroupComposer"], [data-pagelet*="Composer" i]'
@@ -333,45 +398,8 @@ function findComposerTrigger(): HTMLElement | null {
   );
   for (const container of composerContainers) {
     if (container.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form')) continue;
-    const trigger = container.querySelector<HTMLElement>('[role="button"]');
+    const trigger = container.querySelector<HTMLElement>('[role="button"], div[tabindex="0"], div');
     if (trigger && isElementVisible(trigger)) return trigger;
-  }
-
-  // Strategy 2: Group Header / Main area top buttons (strictly excluding articles and comment sections)
-  const candidates = Array.from(
-    document.querySelectorAll<HTMLElement>('[role="main"] [role="button"], [role="button"]')
-  );
-  for (const el of candidates) {
-    if (el.closest('[role="article"], [data-pagelet*="FeedUnit"], [data-pagelet*="Comment"], form')) continue; // IGNORE COMMENTS!
-    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-    const txt = (el.textContent || '').trim().toLowerCase();
-
-    if (
-      aria.includes('create a public post') ||
-      aria.includes('write something') ||
-      aria.includes('create a post') ||
-      aria.includes('কিছু লিখুন') ||
-      aria.includes('পোস্ট তৈরি করুন') ||
-      aria.includes('একটি পাবলিক পোস্ট') ||
-      aria.includes('আপনার মনে কী আছে') ||
-      aria.includes('কী ভাবছেন') ||
-      aria.includes('write discussion') ||
-      aria.includes('start discussion') ||
-      txt === 'create a public post...' ||
-      txt === 'write something...' ||
-      txt === 'create a post...' ||
-      txt === 'create post' ||
-      txt === 'write discussion' ||
-      txt === 'discussion' ||
-      txt.includes('কিছু লিখুন') ||
-      txt.includes('পোস্ট তৈরি করুন') ||
-      txt.includes('পাবলিক পোস্ট') ||
-      txt.includes('আপনার মনে কী আছে') ||
-      txt.includes('কী ভাবছেন') ||
-      txt.includes('আলোচনা')
-    ) {
-      if (isElementVisible(el)) return el;
-    }
   }
 
   return null;
@@ -382,7 +410,11 @@ function findComposerTrigger(): HTMLElement | null {
  * Strictly excludes comment boxes, chat tabs, and feed units.
  */
 function findOpenPostDialog(): HTMLElement | null {
-  const dialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"]'));
+  const dialogs = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[role="dialog"], [aria-modal="true"], div[data-pagelet*="ComposerModal"]'
+    )
+  );
   for (const d of dialogs) {
     if (isElementVisible(d)) {
       // Exclude chat tabs, comment popups, image viewers
@@ -391,7 +423,12 @@ function findOpenPostDialog(): HTMLElement | null {
       const text = (d.textContent || '').toLowerCase();
       const aria = (d.getAttribute('aria-label') || '').toLowerCase();
 
+      const hasEditor = Boolean(d.querySelector('div[role="textbox"][contenteditable="true"], div[contenteditable="true"]'));
+      const hasPostBtn = Boolean(d.querySelector('[aria-label="Post"], [aria-label="Publish"], [aria-label="পোস্ট"], [aria-label="সাবমিট"]'));
+
       const isPostModal =
+        hasEditor ||
+        hasPostBtn ||
         aria.includes('create post') ||
         aria.includes('create a public post') ||
         aria.includes('পোস্ট তৈরি করুন') ||
@@ -433,6 +470,7 @@ function isFacebookPageUnavailable(): boolean {
 
 /**
  * Clicks the composer trigger and waits for the dialog to open.
+ * Dispatches Touch, Pointer, and Mouse events with automatic fallback to Photo trigger.
  */
 async function openComposerModal(): Promise<HTMLElement | null> {
   if (isFacebookPageUnavailable()) return null;
@@ -440,16 +478,16 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   let dialog = findOpenPostDialog();
   if (dialog) return dialog;
 
-  // High-speed reactive polling for composer trigger (10ms checks)
+  // High-speed reactive polling for composer trigger (20ms checks, up to 4.5s)
   let trigger = findComposerTrigger();
   if (!trigger) {
     const triggerStart = Date.now();
-    while (Date.now() - triggerStart < 3500) {
+    while (Date.now() - triggerStart < 4500) {
       dialog = findOpenPostDialog();
       if (dialog) return dialog;
       trigger = findComposerTrigger();
       if (trigger) break;
-      await sleep(10);
+      await sleep(20);
     }
   }
 
@@ -460,20 +498,48 @@ async function openComposerModal(): Promise<HTMLElement | null> {
 
   trigger.scrollIntoView({ behavior: 'instant', block: 'center' });
 
+  // 1. Touch & Mouse dispatch for mobile Kiwi & touch screens
+  try {
+    trigger.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true }));
+    trigger.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
+  } catch (_) {}
+
   trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
   trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
   trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
   trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
   trigger.click();
 
+  // Also click any direct child span or div
+  const innerTarget = trigger.querySelector<HTMLElement>('span, div');
+  if (innerTarget && innerTarget !== trigger) {
+    try {
+      innerTarget.click();
+    } catch (_) {}
+  }
+
   dialog = findOpenPostDialog();
   if (dialog) return dialog;
 
   const start = Date.now();
-  while (Date.now() - start < 3500) {
+  while (Date.now() - start < 4500) {
     dialog = findOpenPostDialog();
     if (dialog) return dialog;
-    await sleep(10);
+    await sleep(20);
+  }
+
+  // 2. Fallback: If dialog didn't open yet, try clicking any Photo button in composer card
+  const fallbackPhotoBtn = document.querySelector<HTMLElement>(
+    '[role="main"] [aria-label*="Photo" i]:not([role="article"] *), [role="main"] [aria-label*="ছবি" i]:not([role="article"] *)'
+  );
+  if (fallbackPhotoBtn) {
+    try {
+      fallbackPhotoBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+      fallbackPhotoBtn.click();
+      await sleep(400);
+      dialog = findOpenPostDialog();
+      if (dialog) return dialog;
+    } catch (_) {}
   }
 
   return null;
