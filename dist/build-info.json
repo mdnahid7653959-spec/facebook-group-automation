@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "386dc06f87d134f197ec847ae779d5a747f56908",
-  "shortSha": "386dc06",
-  "message": "fix: strictly blacklist cover photos and media viewers, prevent opening group photos",
-  "commitDate": "2026-11-10T23:49:57+06:00",
-  "builtAt": "2026-11-10T18:05:02.703Z"
+  "commitSha": "0a47e5080ed82d22a30aef9ce904aaebdbc52684",
+  "shortSha": "0a47e50",
+  "message": "fix: robust composer detection with smart scroll, buy-and-sell group support, and clean group names",
+  "commitDate": "2026-11-11T00:07:28+06:00",
+  "builtAt": "2026-11-11T09:14:41.854Z"
 }

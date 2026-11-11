@@ -322,8 +322,8 @@ function isElementVisible(el: HTMLElement | null): boolean {
 
 /**
  * Strictly blacklists elements that belong to cover photos, group banners,
- * media viewer links, or comments.
- * Never allows clicking cover photos or media viewer items as composer triggers.
+ * media viewer links, navigation tabs, or comments.
+ * Never allows clicking cover photos, tabs, or media viewer items as composer triggers.
  */
 function isComposerBlacklisted(el: HTMLElement | null): boolean {
   if (!el) return true;
@@ -334,7 +334,16 @@ function isComposerBlacklisted(el: HTMLElement | null): boolean {
     return true;
   }
 
-  // 2. Cover photo and banners
+  // 2. Navigation tabs, tablists, menus (NEVER click navigation tabs as composer!)
+  if (
+    el.closest(
+      '[role="tab"], [role="tablist"], [role="navigation"], nav, [role="menu"], [role="menuitem"]'
+    )
+  ) {
+    return true;
+  }
+
+  // 3. Cover photo and banners
   if (
     el.closest(
       '[data-pagelet*="CoverPhoto"], [data-pagelet*="GroupCover"], [data-pagelet*="GroupBanner"], div[data-pagelet="CoverPhoto"]'
@@ -343,12 +352,12 @@ function isComposerBlacklisted(el: HTMLElement | null): boolean {
     return true;
   }
 
-  // 3. Full-screen media viewer or theater mode
+  // 4. Full-screen media viewer or theater mode
   if (el.closest('[data-pagelet*="MediaViewer"], div[aria-label*="Photo viewer" i]')) {
     return true;
   }
 
-  // 4. Links to specific photos, videos, albums, or individual post permalinks
+  // 5. Links to specific photos, videos, albums, or individual post permalinks
   if (
     el.closest(
       'a[href*="/photo/"], a[href*="/photos/"], a[href*="/media/"], a[href*="/album/"], a[href*="/videos/"], a[href*="/posts/"], a[href*="/permalink/"]'
@@ -357,7 +366,7 @@ function isComposerBlacklisted(el: HTMLElement | null): boolean {
     return true;
   }
 
-  // 5. Comments, comment boxes, and post reaction menus
+  // 6. Comments, comment boxes, and post reaction menus
   if (
     el.closest(
       '[data-pagelet*="Comment"], [aria-label*="Comment as" i], [aria-label="Write a comment" i], [aria-label*="Actions for this post" i], [aria-label*="Like" i]'
@@ -366,7 +375,7 @@ function isComposerBlacklisted(el: HTMLElement | null): boolean {
     return true;
   }
 
-  // 6. Aria labels that identify cover/profile photos
+  // 7. Aria labels that identify cover/profile photos
   const aria = (el.getAttribute('aria-label') || '').toLowerCase();
   if (
     aria.includes('cover photo') ||
@@ -414,9 +423,7 @@ const COMPOSER_KEYWORDS = [
   "কী বিক্রি করছেন",
   "কি বিক্রি করছেন",
   "কিছু বিক্রি করুন",
-  "বেনামী পোস্ট",
-  "discussion",
-  "আলোচনা"
+  "বেনামী পোস্ট"
 ];
 
 /**
@@ -527,7 +534,7 @@ function findComposerTrigger(): HTMLElement | null {
     if (isComposerBlacklisted(container)) continue;
 
     // A. Look for text trigger inside the composer card
-    const candidates = Array.from(container.querySelectorAll<HTMLElement>('span, div, [role="button"], button, textarea, input'));
+    const candidates = Array.from(container.querySelectorAll<HTMLElement>('[role="button"], button, div[tabindex="0"], span, textarea, input'));
     for (const el of candidates) {
       if (isComposerBlacklisted(el)) continue;
       const aria = el.getAttribute('aria-label') || '';
@@ -553,38 +560,62 @@ function findComposerTrigger(): HTMLElement | null {
     }
 
     // C. Any generic clickable pill inside the composer card
-    const firstPill = container.querySelector<HTMLElement>('[role="button"], div[tabindex="0"]');
+    const firstPill = container.querySelector<HTMLElement>('div[role="button"][tabindex="0"], div[role="button"]');
     if (firstPill && isElementVisible(firstPill) && !isComposerBlacklisted(firstPill)) {
       return firstPill;
     }
   }
 
-  // Layer 2: Global semantic scan across [role="main"] and group feed
-  const queryScope = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[role="main"] [role="button"], [role="main"] div[tabindex="0"], [role="main"] span, [role="main"] div, div[role="feed"] [role="button"], div[role="feed"] span, div[role="button"], button, span'
-    )
-  );
+  // Layer 2: Find composer at the top of the group feed (Ultra fast & 100% reliable on PC Desktop)
+  const feed = document.querySelector<HTMLElement>('[role="main"] div[role="feed"], div[role="feed"]');
+  if (feed) {
+    const topCards = Array.from(feed.children).slice(0, 3) as HTMLElement[];
+    if (feed.previousElementSibling) {
+      topCards.unshift(feed.previousElementSibling as HTMLElement);
+    }
+    for (const card of topCards) {
+      // Must not be an existing post (existing posts have timestamp links and like/comment buttons)
+      if (card.querySelector('a[href*="/posts/"], a[href*="/permalink/"], [aria-label="Like" i]')) continue;
 
-  for (const el of queryScope) {
-    if (isComposerBlacklisted(el)) continue;
+      const clickables = Array.from(card.querySelectorAll<HTMLElement>('[role="button"], button, [tabindex="0"]'));
+      for (const cl of clickables) {
+        if (isComposerBlacklisted(cl)) continue;
+        const aria = cl.getAttribute('aria-label') || '';
+        const txt = cl.textContent || '';
+        const ph = cl.getAttribute('placeholder') || '';
+        if (isComposerTextMatch(txt, aria, ph)) {
+          if (isElementVisible(cl)) return cl;
+        }
+      }
 
-    const aria = el.getAttribute('aria-label') || '';
-    const txt = el.textContent || '';
-    const ph = el.getAttribute('placeholder') || '';
-
-    if (isComposerTextMatch(txt, aria, ph)) {
-      const clickable =
-        el.closest<HTMLElement>('[role="button"], button') ||
-        el.closest<HTMLElement>('[tabindex="0"]') ||
-        el;
-      if (clickable && isElementVisible(clickable) && !isComposerBlacklisted(clickable)) {
-        return clickable;
+      // Check Photo button inside this top card
+      const photoBtn = card.querySelector<HTMLElement>('[aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]');
+      if (photoBtn && isElementVisible(photoBtn) && !isComposerBlacklisted(photoBtn)) {
+        return photoBtn.closest<HTMLElement>('[role="button"], button') || photoBtn;
       }
     }
   }
 
-  // Layer 3: Mobile web / mbasic / m.facebook.com composer elements
+  // Layer 3: Targeted search on clickable button elements across the page (Only buttons, avoids 7000+ node lag!)
+  const clickableScope = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[role="main"] div[role="button"][tabindex="0"], [role="main"] [role="button"], [role="main"] button, div[role="button"][tabindex="0"], button'
+    )
+  );
+
+  for (const el of clickableScope) {
+    if (isComposerBlacklisted(el)) continue;
+
+    const aria = el.getAttribute('aria-label') || '';
+    const txt = (el.textContent || '').trim();
+    if (txt.length < 100 || aria) {
+      if (isComposerTextMatch(txt, aria)) {
+        if (isElementVisible(el)) return el;
+      }
+    }
+  }
+
+  // Layer 4: Mobile web / mbasic / m.facebook.com composer elements
   const mobileTriggers = Array.from(
     document.querySelectorAll<HTMLElement>(
       'div[data-sigil*="m-composer"], div#MComposer, textarea[name="status"], button[value="Post"], div[role="button"][data-sigil*="touchable"]'
@@ -631,11 +662,15 @@ function findOpenPostDialog(): HTMLElement | null {
     const text = (d.textContent || '').toLowerCase();
     const aria = (d.getAttribute('aria-label') || '').toLowerCase();
 
-    // Check for Post / Publish submit button
+    // Check for Post / Publish submit button (supports aria-label AND visible button text)
     const hasPostBtn = Boolean(
       d.querySelector(
         '[aria-label="Post" i], [aria-label="Publish" i], [aria-label="পোস্ট" i], [aria-label="সাবমিট" i], div[aria-label="Next" i], [role="button"][aria-label="Post" i]'
-      )
+      ) ||
+      Array.from(d.querySelectorAll<HTMLElement>('[role="button"], button')).some(b => {
+        const t = (b.textContent || '').trim().toLowerCase();
+        return t === 'post' || t === 'publish' || t === 'পোস্ট' || t === 'পোস্ট করুন' || t === 'next' || t === 'পরবর্তী';
+      })
     );
 
     // Check for "Add to your post" toolbar
@@ -656,20 +691,26 @@ function findOpenPostDialog(): HTMLElement | null {
       text.includes('create post') ||
       text.includes('পোস্ট তৈরি করুন') ||
       text.includes('what are you selling') ||
-      text.includes('কী বিক্রি করছেন');
+      text.includes('কী বিক্রি করছেন') ||
+      Boolean(d.querySelector('h2, [role="heading"]'));
 
-    // Only accept if genuine composer indicators exist (not a comment box)
-    if (hasPostBtn || hasAddToPost || isPostHeader) {
-      const hasEditor = Boolean(
-        d.querySelector('div[role="textbox"][contenteditable="true"], div[contenteditable="true"]')
-      );
-      if (hasEditor || hasPostBtn || hasAddToPost) {
-        return d;
-      }
+    // Check for Lexical editor inside modal
+    const hasEditor = Boolean(
+      d.querySelector('div[role="textbox"][contenteditable="true"], div[contenteditable="true"]')
+    );
+
+    // Accept if hasEditor AND any composer indicator
+    if (hasEditor && (hasPostBtn || hasAddToPost || isPostHeader)) {
+      return d;
+    }
+
+    // Or if hasPostBtn AND hasAddToPost
+    if (hasPostBtn && hasAddToPost) {
+      return d;
     }
   }
 
-  // 2. Check for expanded in-place inline composer card (common on responsive desktop and mobile)
+  // 2. Check for expanded in-place inline composer card
   const inlineEditors = Array.from(
     document.querySelectorAll<HTMLElement>(
       '[data-pagelet*="Composer"] div[role="textbox"][contenteditable="true"], [data-pagelet*="InlineComposer"] div[role="textbox"][contenteditable="true"]'
@@ -712,7 +753,7 @@ function isFacebookPageUnavailable(): boolean {
 
 /**
  * Clicks the composer trigger and waits for the dialog to open.
- * Dispatches Touch, Pointer, and Mouse events.
+ * Dispatches Touch, Pointer, and Mouse events with full React 18 compliance.
  * Strictly prevents opening cover photos or media viewer.
  */
 async function openComposerModal(): Promise<HTMLElement | null> {
@@ -774,20 +815,28 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   trigger.scrollIntoView({ behavior: 'instant', block: 'center' });
   await sleep(40);
 
-  // Touch & Mouse dispatch for mobile Kiwi & touch screens
+  // Focus trigger element
+  try {
+    trigger.focus();
+  } catch (_) {}
+
+  // Touch & Mouse dispatch with view: window and button: 0 for full React 18 compliance
   try {
     trigger.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true }));
     trigger.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true }));
   } catch (_) {}
 
-  trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-  trigger.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-  trigger.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-  trigger.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+  const mouseOpts = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1, detail: 1 };
+  const upOpts = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 0, detail: 1 };
+
+  trigger.dispatchEvent(new PointerEvent('pointerdown', mouseOpts));
+  trigger.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+  trigger.dispatchEvent(new PointerEvent('pointerup', upOpts));
+  trigger.dispatchEvent(new MouseEvent('mouseup', upOpts));
   trigger.click();
 
   // Also click any direct child span or div if trigger is a wrapper
-  const innerTarget = trigger.querySelector<HTMLElement>('span, div');
+  const innerTarget = trigger.querySelector<HTMLElement>('span, div[dir="auto"], div');
   if (innerTarget && innerTarget !== trigger && !isComposerBlacklisted(innerTarget)) {
     try {
       innerTarget.click();
@@ -799,6 +848,20 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   while (Date.now() - start < 5500) {
     dialog = findOpenPostDialog();
     if (dialog) return dialog;
+
+    // Fallback: If after 1.2s dialog hasn't opened, try clicking Photo/video button in composer card
+    if (Date.now() - start > 1200 && Date.now() - start < 1350) {
+      const card = trigger.closest<HTMLElement>('[data-pagelet*="Composer"], div[role="feed"] > div');
+      if (card) {
+        const photoFallback = card.querySelector<HTMLElement>('[aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]');
+        if (photoFallback && isElementVisible(photoFallback) && !isComposerBlacklisted(photoFallback)) {
+          try {
+            photoFallback.click();
+          } catch (_) {}
+        }
+      }
+    }
+
     await sleep(25);
   }
 
