@@ -812,6 +812,10 @@ async function openComposerModal(): Promise<HTMLElement | null> {
     return null;
   }
 
+  // Check again right before clicking: maybe dialog opened while scrolling
+  dialog = findOpenPostDialog();
+  if (dialog) return dialog;
+
   trigger.scrollIntoView({ behavior: 'instant', block: 'center' });
   await sleep(40);
 
@@ -833,36 +837,31 @@ async function openComposerModal(): Promise<HTMLElement | null> {
   trigger.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
   trigger.dispatchEvent(new PointerEvent('pointerup', upOpts));
   trigger.dispatchEvent(new MouseEvent('mouseup', upOpts));
+  // Single, clean click - never fire duplicate innerTarget.click() which causes modal to open twice!
   trigger.click();
 
-  // Also click any direct child span or div if trigger is a wrapper
-  const innerTarget = trigger.querySelector<HTMLElement>('span, div[dir="auto"], div');
-  if (innerTarget && innerTarget !== trigger && !isComposerBlacklisted(innerTarget)) {
-    try {
-      innerTarget.click();
-    } catch (_) {}
+  // Poll for dialog opening (up to 5s)
+  const start = Date.now();
+  while (Date.now() - start < 5000) {
+    dialog = findOpenPostDialog();
+    if (dialog) return dialog; // Instantly return the moment it opens!
+    await sleep(25);
   }
 
-  // Poll for dialog opening (up to 5.5s)
-  const start = Date.now();
-  while (Date.now() - start < 5500) {
-    dialog = findOpenPostDialog();
-    if (dialog) return dialog;
-
-    // Fallback: If after 1.2s dialog hasn't opened, try clicking Photo/video button in composer card
-    if (Date.now() - start > 1200 && Date.now() - start < 1350) {
-      const card = trigger.closest<HTMLElement>('[data-pagelet*="Composer"], div[role="feed"] > div');
-      if (card) {
-        const photoFallback = card.querySelector<HTMLElement>('[aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]');
-        if (photoFallback && isElementVisible(photoFallback) && !isComposerBlacklisted(photoFallback)) {
-          try {
-            photoFallback.click();
-          } catch (_) {}
-        }
+  // Only if after 5 seconds NO dialog opened at all, try single fallback on Photo button
+  if (!dialog) {
+    const card = trigger.closest<HTMLElement>('[data-pagelet*="Composer"], div[role="feed"] > div');
+    if (card) {
+      const photoFallback = card.querySelector<HTMLElement>('[aria-label*="Photo/video" i], [aria-label*="ছবি/ভিডিও" i]');
+      if (photoFallback && isElementVisible(photoFallback) && !isComposerBlacklisted(photoFallback)) {
+        try {
+          photoFallback.click();
+          await sleep(500);
+          dialog = findOpenPostDialog();
+          if (dialog) return dialog;
+        } catch (_) {}
       }
     }
-
-    await sleep(25);
   }
 
   // Check if accidental photo viewer opened anyway, and close it immediately
@@ -1665,6 +1664,13 @@ async function findAndClickPostButton(dialog: HTMLElement, timeoutMs = 15000): P
                              btn.classList.contains('aria-disabled') ||
                              btn.classList.contains('disabled');
 
+        // If Facebook has a "Next" step before final "Post", click Next!
+        if ((txt === 'next' || aria === 'next' || txt === 'পরবর্তী' || aria === 'পরবর্তী') && !disabledAttr) {
+          btn.click();
+          await sleep(500);
+          break;
+        }
+
         const isPostMatch =
           aria === 'post' ||
           aria === 'publish' ||
@@ -1694,10 +1700,13 @@ async function findAndClickPostButton(dialog: HTMLElement, timeoutMs = 15000): P
         if (isPostMatch && !disabledAttr) {
           btn.scrollIntoView({ behavior: 'instant', block: 'center' });
           btn.style.outline = '3px solid #10b981';
-          btn.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-          btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+          try { btn.focus(); } catch (_) {}
+          const mouseOpts = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1, detail: 1 };
+          const upOpts = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 0, detail: 1 };
+          btn.dispatchEvent(new PointerEvent('pointerdown', mouseOpts));
+          btn.dispatchEvent(new MouseEvent('mousedown', mouseOpts));
+          btn.dispatchEvent(new PointerEvent('pointerup', upOpts));
+          btn.dispatchEvent(new MouseEvent('mouseup', upOpts));
           btn.click();
           return true;
         }

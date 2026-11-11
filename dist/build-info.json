@@ -1,8 +1,8 @@
 {
   "version": "1.0.1",
-  "commitSha": "0a47e5080ed82d22a30aef9ce904aaebdbc52684",
-  "shortSha": "0a47e50",
-  "message": "fix: robust composer detection with smart scroll, buy-and-sell group support, and clean group names",
-  "commitDate": "2026-11-11T00:07:28+06:00",
-  "builtAt": "2026-11-11T09:14:41.854Z"
+  "commitSha": "446d101945777d1eb96fe103caf69c0d52e85236",
+  "shortSha": "446d101",
+  "message": "fix: resolve PC desktop Facebook composer detection and React 18 event dispatching",
+  "commitDate": "2026-11-11T15:26:11+06:00",
+  "builtAt": "2026-11-11T09:39:42.818Z"
 }
